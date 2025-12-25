@@ -1,11 +1,12 @@
 // =================配置区域=================
-const API_KEY = ''; // ⚠️ 记得填你的 Key
+const API_KEY = 'sk-or-v1-2c2f931f64bed4bbc0c0e0cce9a4888f6e8808a085a13'; // ⚠️ 记得填你的 Key
 const API_URL = 'https://openrouter.ai/api/v1/chat/completions'; 
 // =========================================
 
 const writeBtn = document.getElementById("writeBtn");
 const userPrompt = document.getElementById("userPrompt");
 const statusDiv = document.getElementById("status");
+const aiResponseArea = document.getElementById("aiResponse");
 
 // === 🎒 记忆背包 UI 元素 ===
 const toggleMemoryBtn = document.getElementById("toggleMemoryBtn");
@@ -66,8 +67,6 @@ writeBtn.addEventListener("click", async () => {
     // === 第二步：制定作战计划 ===
     statusDiv.innerText = "🧠 指挥官正在制定计划...";
     
-    const bgText = pageData.text.substring(0, 2000);
-    // 把框和按钮的信息都发给 AI
     const uiContext = JSON.stringify({
         inputs: pageData.inputs,
         buttons: pageData.buttons
@@ -78,7 +77,9 @@ writeBtn.addEventListener("click", async () => {
     const userMemory = memoryData.userMemory || "（用户暂无存储的个人信息）";
 
     const fullPrompt = `
-      【网页背景文字】：${bgText}
+      【网页背景文字】：${pageData.text}
+      
+      【潜在数据区域】：${pageData.dataContext || "无"}
       
       【网页UI元素清单】：${uiContext}
       
@@ -87,32 +88,80 @@ writeBtn.addEventListener("click", async () => {
       【用户指令】：${prompt}
       
       【任务】：
-      1. 分析用户意图和网页内容。
-      2. 结合【用户记忆背包】中的信息，决定需要填写的输入框 (fill)。如果用户要求填写的信息在背包里能找到，请优先使用背包里的信息。
-      3. 决定填写完毕后需要点击的按钮 (click)。请找到最像“提交/登录/搜索/下一步”的那个按钮。
+      请判断用户的意图是 "操作网页"、"抓取数据" 还是 "普通问答/摘要"。
       
-      【输出格式】：
-      请务必只返回纯 JSON，格式如下：
+      1. 如果是 **操作网页**：
+         - 结合【用户记忆背包】决定输入框 (fill) 的内容。
+         - 决定需要点击的按钮 (click)。
+         
+      2. 如果是 **抓取数据**：
+         - 提取信息并整理为 scrape.data (JSON数组)。
+         - 指定文件名 scrape.filename (.csv)。
+         
+      3. 如果是 **普通问答/摘要**：
+         - 如果用户只是问问题，或者让你总结网页，或者没有网页操作/抓取的需求。
+         - 请把回答写在 message 字段里。
+      
+      【输出格式 (JSON)】：
       {
-        "fill": {"输入框ID或Name": "要填的内容", ...},
-        "click": "按钮的ID或Name" (如果没有合适的按钮可点，这一个字段可以是 null)
+        // 场景 A：操作
+        "fill": {"输入框ID": "内容", ...},
+        "click": "按钮ID",
+        
+        // 场景 B：抓取
+        "scrape": { ... },
+        
+        // 场景 C：回答/摘要
+        "message": "这里写你的纯文本回答..."
       }
+      (请只返回一个 JSON 对象，不要 markdown 格式)
     `;
 
     const aiResponseText = await callAI(fullPrompt);
     console.log("AI计划：", aiResponseText);
 
-    // === 第三步：执行计划（填表 + 点击） ===
-    statusDiv.innerText = "⚡️ 正在执行自动化操作...";
+    // === 第三步：执行计划 (Message / Scrape / Action) ===
+    statusDiv.innerText = "⚡️ 正在处理...";
 
     const cleanJson = aiResponseText.replace(/```json/g, "").replace(/```/g, "").trim();
     const actionPlan = JSON.parse(cleanJson);
 
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      function: executeActionPlan, // 👈 升级版的执行者
-      args: [actionPlan]
-    });
+    // 1. 纯文本回答
+    if (actionPlan.message) {
+        statusDiv.innerText = "✅ AI 已回复";
+        aiResponseArea.style.display = "block";
+        aiResponseArea.value = actionPlan.message;
+        
+        // 如果没有其他操作，就不往下走了
+        if (!actionPlan.fill && !actionPlan.click && !actionPlan.scrape) {
+            return;
+        }
+    } else {
+        aiResponseArea.style.display = "none";
+        aiResponseArea.value = "";
+    }
+
+    // 2. 抓取数据 (在 Popup 里生成文件直接下载即可)
+    if (actionPlan.scrape) {
+        statusDiv.innerText = "📊 正在导出数据...";
+        exportToCSV(actionPlan.scrape.data, actionPlan.scrape.filename);
+        statusDiv.innerText = "✅ 数据已导出！";
+        // 抓取通常也是终点，但也可能混合
+        if (!actionPlan.fill && !actionPlan.click) {
+             return;
+        }
+    }
+
+    // 3. 网页操作 (填表 + 点击) -> 需要注入到页面去执行
+    if (actionPlan.fill || actionPlan.click) {
+        statusDiv.innerText = "⚡️ 正在执行页面操作...";
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          function: executeActionPlan, // 👈 升级版的执行者
+          args: [actionPlan]
+        });
+        statusDiv.innerText = "✅ 操作指令已发送";
+    }
 
     statusDiv.innerText = "✅ 任务完成！";
 
@@ -160,10 +209,25 @@ function analyzePageElements() {
     });
   });
 
+  // 3. (新) 找数据容器 (Tables, Lists)
+  // 如果用户想抓取数据，把 tables 和 ul/ol 的源码或者文本也给 AI
+  const dataContainers = document.querySelectorAll('table, ul, ol, div[class*="list"], div[class*="grid"]');
+  let dataContext = "";
+  dataContainers.forEach((el, index) => {
+      // 限制每个块的大小，防止 token 爆炸，只取前 1000 个字符的 innerText 概览
+      // 或者如果是 table，取 outerHTML 的简化版? 
+      // 这里简化处理：只拼凑 innerText，让 AI 自己去按照换行符猜
+      // 更好的做法是给 AI 一部分 HTML 结构，但这里为了省 token，我们先试 text
+      if (el.innerText.length > 20) {
+          dataContext += `\n--- [Possible Data Block ${index}] ---\n${el.innerText.substring(0, 500)}\n...`;
+      }
+  });
+
   return {
-    text: bodyText,
+    text: bodyText.substring(0, 3000), // 增加一点正文长度
     inputs: inputList,
-    buttons: btnList
+    buttons: btnList,
+    dataContext: dataContext // 👈 专门给抓取任务用的
   };
 }
 
@@ -171,6 +235,7 @@ function analyzePageElements() {
 // ⚡️ 执行者 v2.0：先填后点
 // ==========================================
 function executeActionPlan(plan) {
+  // === 分支 2：如果是操作任务 (Fill & Click) ===
   // 1. 填空
   if (plan.fill) {
     for (const [key, value] of Object.entries(plan.fill)) {
@@ -214,6 +279,49 @@ function executeActionPlan(plan) {
           }
       }, 500);
   }
+}
+
+// ==========================================
+// 📥 导出函数：JSON -> CSV -> 自动下载
+// ==========================================
+function exportToCSV(data, filename) {
+  if (!data || data.length === 0) {
+    alert("AI 没有找到有效的数据 :(");
+    return;
+  }
+
+  // 1. 提取表头 (Keys)
+  const headers = Object.keys(data[0]);
+  
+  // 2. 拼接 CSV 内容
+  // BOM (\uFEFF) 让 Excel 能够正确识别 UTF-8 中文
+  let csvContent = "\uFEFF"; 
+  csvContent += headers.join(",") + "\n"; // 表头行
+
+  data.forEach(row => {
+    const rowStr = headers.map(header => {
+      let cell = row[header] || "";
+      // 处理单元格里的逗号和换行 (用双引号包起来)
+      cell = String(cell).replace(/"/g, '""'); 
+      if (cell.search(/("|,|\n)/g) >= 0) {
+        cell = `"${cell}"`;
+      }
+      return cell;
+    }).join(",");
+    csvContent += rowStr + "\n";
+  });
+
+  // 3. 创建 Blob 并触发下载
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename || "data_export.csv";
+  link.style.visibility = 'hidden';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
 // ==========================================
