@@ -162,7 +162,8 @@ async function handleSmartStart(tabId, prompt, mode) {
     await resetTaskState(tabId);
 
     // 1. 初始化新状态
-    const effectivePrompt = prompt || "AUTONOMOUS_MODE: Analyze page and infer intent";
+    const trimmedPrompt = (prompt || "").trim();
+    const effectivePrompt = trimmedPrompt || "AUTONOMOUS_MODE: Analyze page and infer intent";
     
     globalState = {
         active: true,
@@ -173,7 +174,7 @@ async function handleSmartStart(tabId, prompt, mode) {
         goalStack: [],
         stepInfo: '🔍 正在分析页面...',
         waitingForLoad: false,
-        lastPrompt: prompt,
+        lastPrompt: trimmedPrompt,
         lastPageHash: null,
         iterationCount: 0
     };
