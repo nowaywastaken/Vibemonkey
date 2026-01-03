@@ -274,9 +274,15 @@
         </div>
 
         <div class="form-group">
-          <label for="modelName" data-i18n="labelModelName">Model Name</label>
+          <label for="modelName" data-i18n="labelModelName">Automation Model (Primary)</label>
           <input type="text" id="modelName" placeholder="google/gemini-2.5-flash">
-          <div class="hint" data-i18n="hintModelName">e.g. gpt-4o, deepseek-r1, llama3.2</div>
+          <div class="hint" data-i18n="hintModelName">Used for planning and decision making. e.g. gpt-4o, deepseek-r1</div>
+        </div>
+
+        <div class="form-group">
+          <label for="visionModelName" data-i18n="labelVisionModelName">Vision Model (Secondary)</label>
+          <input type="text" id="visionModelName" placeholder="google/gemini-2.0-flash-001">
+          <div class="hint" data-i18n="hintVisionModelName">Used for screenshot analysis and repair. e.g. gpt-4o-mini, gemini-pro-vision</div>
         </div>
 
         <div class="hint" style="margin-bottom: 20px;" data-i18n="hintLocalStorage">

@@ -26,16 +26,18 @@ const saveBtn = document.getElementById('saveBtn');
 const apiKeyInput = document.getElementById('apiKey');
 const providerUrlInput = document.getElementById('providerUrl');
 const modelNameInput = document.getElementById('modelName');
+const visionModelNameInput = document.getElementById('visionModelName');
 const statusDiv = document.getElementById('status');
 
 // Initialize: Load existing Key & Scripts & Model Config
-chrome.storage.local.get(['apiKey', 'userScripts', 'providerUrl', 'modelName'], (result) => {
+chrome.storage.local.get(['apiKey', 'userScripts', 'providerUrl', 'modelName', 'visionModelName'], (result) => {
     if (result.apiKey) {
         apiKeyInput.value = result.apiKey;
     }
     // Set values or defaults
     providerUrlInput.value = result.providerUrl || "https://openrouter.ai/api/v1/chat/completions";
-    modelNameInput.value = result.modelName || "google/gemini-2.5-flash";
+    modelNameInput.value = result.modelName || "google/gemini-2.0-flash-001";
+    visionModelNameInput.value = result.visionModelName || result.modelName || "google/gemini-2.0-flash-001";
     
     renderScripts(result.userScripts || []);
 });
@@ -44,10 +46,12 @@ saveBtn.addEventListener('click', () => {
     const key = apiKeyInput.value.trim();
     let url = providerUrlInput.value.trim();
     let model = modelNameInput.value.trim();
+    let visionModel = visionModelNameInput.value.trim();
     
     // Defaults if empty
     if (!url) url = "https://openrouter.ai/api/v1/chat/completions";
-    if (!model) model = "google/gemini-2.5-flash";
+    if (!model) model = "google/gemini-2.0-flash-001";
+    if (!visionModel) visionModel = model;
 
     if (!key) {
         showStatus(i18n('errorApiKeyEmpty'), 'error');
@@ -57,13 +61,15 @@ saveBtn.addEventListener('click', () => {
     chrome.storage.local.set({ 
         apiKey: key,
         providerUrl: url,
-        modelName: model
+        modelName: model,
+        visionModelName: visionModel
     }, () => {
         showStatus(i18n('settingsSaved'), 'success');
         
         // Update input values to reflect defaults if they were empty
         providerUrlInput.value = url;
         modelNameInput.value = model;
+        visionModelNameInput.value = visionModel;
     });
 });
 

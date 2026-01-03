@@ -207,7 +207,7 @@ async function handleSmartStart(tabId, prompt, mode) {
     }
     
     // 5. 获取配置
-    const apiConfig = await chrome.storage.local.get(['apiKey', 'providerUrl', 'modelName']);
+    const apiConfig = await chrome.storage.local.get(['apiKey', 'providerUrl', 'modelName', 'visionModelName']);
     if (!apiConfig.apiKey) {
         globalState.stepInfo = '❌ 请先在设置中配置 API Key';
         globalState.active = false;
@@ -215,6 +215,18 @@ async function handleSmartStart(tabId, prompt, mode) {
         updateOverlay(tabId, globalState.stepInfo);
         return;
     }
+    
+    // 构建双模型配置
+    const automationConfig = {
+        apiKey: apiConfig.apiKey,
+        providerUrl: apiConfig.providerUrl,
+        modelName: apiConfig.modelName
+    };
+    const visionConfig = {
+        apiKey: apiConfig.apiKey,
+        providerUrl: apiConfig.providerUrl,
+        modelName: apiConfig.visionModelName || apiConfig.modelName
+    };
     
     // 6. 启动看门狗 (Watchdog)
     const watchdogInterval = setInterval(() => {
@@ -243,7 +255,7 @@ async function handleSmartStart(tabId, prompt, mode) {
     
     // 7. 开始迭代执行循环
     try {
-        await runIterativeLoop(tabId, prompt, apiConfig);
+        await runIterativeLoop(tabId, prompt, { automationConfig, visionConfig });
     } finally {
         clearInterval(watchdogInterval);
     }
@@ -252,7 +264,8 @@ async function handleSmartStart(tabId, prompt, mode) {
 /**
  * 迭代执行循环 - 核心逻辑
  */
-async function runIterativeLoop(tabId, userGoal, apiConfig) {
+async function runIterativeLoop(tabId, userGoal, configs) {
+    const { automationConfig, visionConfig } = configs;
     const MAX_ITERATIONS = 30;
     const userMemoryData = await chrome.storage.local.get('userMemory');
     const userMemory = parseUserMemory(userMemoryData.userMemory || '');
@@ -304,15 +317,22 @@ async function runIterativeLoop(tabId, userGoal, apiConfig) {
                 screenshot,
                 actionHistory: globalState.actionHistory,
                 memory,
-                apiConfig,
-                memory,
-                apiConfig,
-                memory,
-                apiConfig,
+                apiConfig: automationConfig,
                 tabId,  // 传递 tabId 用于流式思考显示
                 goalStack: globalState.goalStack || [], // Cognitive State
-                previousPageHash: globalState.lastPageHash // 🌟 Mechanical Guard
+                previousPageHash: globalState.lastPageHash, // 🌟 Mechanical Guard
+                isStuck: globalState.isStuck || false
             });
+            
+            // 重置/更新卡住状态
+            if (!planResult.nextStep && !planResult.goalCompleted) {
+                if (!globalState.isStuck) {
+                    console.warn('⚠️ AI Stalled: No action returned. Nudging once...');
+                    globalState.isStuck = true;
+                    continue; // Immediately retry with nudge
+                }
+            }
+            globalState.isStuck = false; // Resolved or truly stuck
             
             // 更新认知状态
             if (planResult.updatedGoalStack) {
@@ -349,8 +369,9 @@ async function runIterativeLoop(tabId, userGoal, apiConfig) {
             
             // 🛡️ V4: Repetition Detector
             const recentActions = globalState.actionHistory.slice(-3);
+            const currentTargetStr = JSON.stringify(resolvedStep.target);
             const isDuplicate = recentActions.filter(a => 
-                a.action === resolvedStep.action && a.target === resolvedStep.target
+                a.action === resolvedStep.action && JSON.stringify(a.target) === currentTargetStr
             ).length >= 2;
             
             if (isDuplicate) {
@@ -374,27 +395,13 @@ async function runIterativeLoop(tabId, userGoal, apiConfig) {
             // 记录执行前的页面指纹
             const beforeHash = pageData.contentHash;
             
-            // 9.5 解析虚拟 Key (例如 ai_1, ai_2) 为真实 CSS 选择器
-            // AI 现在返回 interactiveMap 中的 Key (ai-id)
+            // 9.5 解析虚拟 Key (ai-id) 为真实选择器集合
             const targetKey = resolvedStep.target;
             if (targetKey && pageData.interactiveMap && pageData.interactiveMap[targetKey]) {
-                const realSelector = pageData.interactiveMap[targetKey];
-                console.log(`🔄 Resolving AI ID '${targetKey}' -> '${realSelector}'`);
-                resolvedStep.target = realSelector;
-            } else if (targetKey && (pageData.inputs || pageData.buttons)) {
-                // 兼容旧版逻辑 (Run safe fallback)
-                let realSelector = null;
-                const matchedInput = pageData.inputs?.find(i => i.key === targetKey);
-                if (matchedInput?.selector) realSelector = matchedInput.selector;
-                
-                if (!realSelector) {
-                    const matchedButton = pageData.buttons?.find(b => b.key === targetKey);
-                    if (matchedButton?.selector) realSelector = matchedButton.selector;
-                }
-                
-                if (realSelector) {
-                    resolvedStep.target = realSelector;
-                }
+                const elementDetails = pageData.interactiveMap[targetKey];
+                // 🌟 传递整个选择器数组给执行器，实现原子化重试
+                console.log(`🔄 Resolving AI ID '${targetKey}' -> ${elementDetails.selectors.length} strategy(s)`);
+                resolvedStep.target = elementDetails.selectors;
             }
             
             updateOverlay(tabId, `⚡️ [${globalState.iterationCount}] ${resolvedStep.description}`);
@@ -479,7 +486,7 @@ async function runIterativeLoop(tabId, userGoal, apiConfig) {
                 // 尝试视觉修复
                 if (self.Vision) {
                     updateOverlay(tabId, '🔧 尝试视觉修复...');
-                    const repairResult = await self.Vision.repairSelector(tabId, resolvedStep, apiConfig);
+                    const repairResult = await self.Vision.repairSelector(tabId, resolvedStep, visionConfig);
                     
                     if (repairResult.success) {
                         // 用新选择器重试
@@ -622,41 +629,54 @@ async function waitForPageStable(tabId, timeout = 3000) {
  * 检查是否为受限 URL
  */
 function isRestrictedUrl(url) {
+    if (!url) return true;
     return url.startsWith('chrome://') || 
            url.startsWith('edge://') || 
            url.startsWith('about:') || 
            url.startsWith('view-source:') ||
-           url.startsWith('chrome-extension://');
+           url.startsWith('chrome-extension://') ||
+           url.startsWith('https://chrome.google.com/webstore') ||
+           url.startsWith('https://chromewebstore.google.com');
 }
 
 /**
  * 分析页面元素
  */
 async function analyzePage(tabId) {
-    let result = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: analyzePageElements
-    });
-    
-    let data = result[0]?.result;
-    
-    // 如果 SnapshotGenerator 未加载，注入并重试
-    if (data && data.error === 'SnapshotGenerator not loaded') {
-        console.log('🔧 Injecting dom_tools.js for SnapshotGenerator...');
-        await chrome.scripting.executeScript({
-            target: { tabId },
-            files: ['lib/dom_tools.js']
-        });
-        
-        // Retry
-        result = await chrome.scripting.executeScript({
+    try {
+        const tab = await chrome.tabs.get(tabId);
+        if (isRestrictedUrl(tab.url)) {
+            return { error: 'Restricted URL', domTree: '', interactiveMap: {}, text: '' };
+        }
+
+        let result = await chrome.scripting.executeScript({
             target: { tabId },
             func: analyzePageElements
         });
-        data = result[0]?.result;
-    }
+        
+        let data = result[0]?.result;
+        
+        // 如果 SnapshotGenerator 未加载，注入并重试
+        if (data && data.error === 'SnapshotGenerator not loaded') {
+            console.log('🔧 Injecting dom_tools.js for SnapshotGenerator...');
+            await chrome.scripting.executeScript({
+                target: { tabId },
+                files: ['lib/dom_tools.js']
+            });
+            
+            // Retry
+            result = await chrome.scripting.executeScript({
+                target: { tabId },
+                func: analyzePageElements
+            });
+            data = result[0]?.result;
+        }
 
-    return data || { domTree: '', interactiveMap: {}, text: '', inputs: [], buttons: [] };
+        return data || { domTree: '', interactiveMap: {}, text: '', inputs: [], buttons: [] };
+    } catch (e) {
+        console.error('analyzePage error:', e);
+        return { error: e.message, domTree: '', interactiveMap: {}, text: '' };
+    }
 }
 
 /**
@@ -673,10 +693,14 @@ function analyzePageElements() {
     
     const snapshot = window.SnapshotGenerator.generateSnapshot();
     
-    // 序列化 interactiveMap (只保留 selector)
+    // 序列化 interactiveMap
     const map = {};
     for (const [key, value] of Object.entries(snapshot.interactiveMap)) {
-        map[key] = value.selector;
+        map[key] = {
+            selectors: value.selectors,
+            tag: value.tag,
+            text: value.text
+        };
     }
     
     return {
