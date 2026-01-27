@@ -18,4 +18,5 @@ export default defineConfig({
       extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
     },
   },
+  modules: ['@wxt-dev/module-react'],
 });

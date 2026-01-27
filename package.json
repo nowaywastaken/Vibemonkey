@@ -15,11 +15,22 @@
     "postinstall": "wxt prepare"
   },
   "devDependencies": {
+    "@wxt-dev/module-react": "^1.1.5",
     "typescript": "^5.9.3",
     "wxt": "^0.20.6"
   },
   "dependencies": {
     "@swc/wasm-web": "^1.15.10",
-    "quickjs-emscripten": "^0.31.0"
+    "@types/react": "^19.2.10",
+    "@types/react-dom": "^19.2.3",
+    "autoprefixer": "^10.4.23",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.563.0",
+    "postcss": "^8.5.6",
+    "quickjs-emscripten": "^0.31.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "tailwind-merge": "^3.4.0",
+    "tailwindcss": "^4.1.18"
   }
 }
