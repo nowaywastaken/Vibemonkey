@@ -117,7 +117,7 @@ export class NetworkMonitor {
   /**
    * 获取统计信息
    */
-  getStats(): NetworkStats {
+  getStats(urlPattern?: string): NetworkStats {
     let total = 0;
     let successful = 0;
     let failed = 0;
@@ -125,7 +125,13 @@ export class NetworkMonitor {
     let totalDuration = 0;
     let durationCount = 0;
 
+    const regex = urlPattern ? new RegExp(urlPattern.replace(/\*/g, '.*')) : null;
+
     this.requests.forEach(request => {
+      if (regex && !regex.test(request.url)) {
+        return;
+      }
+
       total++;
       
       if (request.error) {

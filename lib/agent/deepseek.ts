@@ -9,6 +9,15 @@ export interface Message {
   tool_call_id?: string;
 }
 
+export interface ToolProperty {
+  type: string;
+  description?: string;
+  enum?: string[];
+  items?: ToolProperty;
+  properties?: Record<string, ToolProperty>;
+  required?: string[];
+}
+
 export interface Tool {
   type: 'function';
   function: {
@@ -16,11 +25,7 @@ export interface Tool {
     description: string;
     parameters: {
       type: 'object';
-      properties: Record<string, {
-        type: string;
-        description: string;
-        enum?: string[];
-      }>;
+      properties: Record<string, ToolProperty>;
       required?: string[];
     };
   };
