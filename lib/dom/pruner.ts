@@ -71,7 +71,7 @@ export class DOMPruner {
   /**
    * 阶段1：规则过滤 - 移除无关元素
    */
-  pruneDecorative(doc: Document): void {
+  pruneDecorative(doc: Document, styleSourceDoc?: Document): void {
     // 移除无意义标签
     for (const tag of PRUNE_TAGS) {
       const elements = doc.querySelectorAll(tag);
@@ -81,9 +81,27 @@ export class DOMPruner {
     // 移除隐藏元素
     if (!this.options.includeHidden) {
       const allElements = doc.querySelectorAll('*');
-      allElements.forEach(el => {
-        const style = getComputedStyle(el);
-        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+      allElements.forEach((el, index) => {
+        let isHidden = false;
+        
+        // 如果提供了样式来源文档（即原始文档），则从那里获取样式
+        if (styleSourceDoc) {
+          const sourceEl = styleSourceDoc.querySelectorAll('*')[index];
+          if (sourceEl) {
+            const style = getComputedStyle(sourceEl);
+            isHidden = style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0';
+          }
+        } else {
+          // 否则尝试直接获取（仅在非克隆文档中有效）
+          try {
+            const style = getComputedStyle(el);
+            isHidden = style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0';
+          } catch (e) {
+            // 在克隆文档中 getComputedStyle 可能抛错或无效
+          }
+        }
+
+        if (isHidden) {
           el.remove();
         }
       });
@@ -281,11 +299,12 @@ export class DOMPruner {
    * 完整的剪枝流程
    */
   prune(doc: Document): PrunedElement[] {
-    // 克隆文档避免修改原始 DOM
+    // 阶段1：规则过滤（在原始文档基础上进行，但传入克隆以供操作）
+    // 为了不修改原始 DOM，我们克隆一个文档
     const clone = doc.cloneNode(true) as Document;
     
-    // 阶段1：规则过滤
-    this.pruneDecorative(clone);
+    // 执行剪枝，传入原始文档作为样式参考
+    this.pruneDecorative(clone, doc);
     
     // 阶段2+3：评分并提取
     return this.extractTopCandidates(clone, this.options.maxElements);
