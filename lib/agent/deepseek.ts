@@ -106,7 +106,7 @@ export class DeepSeekClient {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.apiKey}`,
         'HTTP-Referer': 'chrome-extension://vibemonkey',
-        'X-Title': 'VibeMokey',
+        'X-Title': 'VibeMonkey',
       },
       body: JSON.stringify(body),
     });
@@ -140,7 +140,7 @@ export class DeepSeekClient {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.apiKey}`,
         'HTTP-Referer': 'chrome-extension://vibemonkey',
-        'X-Title': 'VibeMokey',
+        'X-Title': 'VibeMonkey',
       },
       body: JSON.stringify(body),
     });

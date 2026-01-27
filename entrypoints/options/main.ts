@@ -1,5 +1,5 @@
 /**
- * VibeMokey Options Page Main Script
+ * VibeMonkey Options Page Main Script
  */
 import './style.css';
 

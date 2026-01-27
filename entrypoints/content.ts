@@ -1,5 +1,5 @@
 /**
- * VibeMokey Content Script
+ * VibeMonkey Content Script
  * 负责 DOM 分析、语义提取和运行时错误捕获
  */
 
@@ -83,7 +83,7 @@ const recentErrors: RuntimeError[] = [];
 export default defineContentScript({
   matches: ['<all_urls>'],
   async main() {
-    console.log('[VibeMokey] Content script loaded');
+    console.log('[VibeMonkey] Content script loaded');
 
     // 初始化网络监控
     networkMonitor = setupNetworkMonitor();
@@ -124,18 +124,18 @@ async function runMatchedScripts(): Promise<void> {
     });
 
     if (response?.success && response.scripts) {
-      console.log(`[VibeMokey] Found ${response.scripts.length} matching scripts`);
+      console.log(`[VibeMonkey] Found ${response.scripts.length} matching scripts`);
       
       for (const script of response.scripts) {
         try {
-          console.log(`[VibeMokey] Executing script: ${script.name}`);
+          console.log(`[VibeMonkey] Executing script: ${script.name}`);
           
           // 获取最新版本的代码
           // 注意：ScriptVersionManager 存储的是 VersionedScript
           const code = script.compiledCode || script.versions?.[0]?.compiledCode || script.code;
           
           if (!code) {
-            console.warn(`[VibeMokey] No code found for script: ${script.name}`);
+            console.warn(`[VibeMonkey] No code found for script: ${script.name}`);
             continue;
           }
 
@@ -146,7 +146,7 @@ async function runMatchedScripts(): Promise<void> {
           fn();
           
         } catch (error) {
-          console.error(`[VibeMokey] Error executing script ${script.name}:`, error);
+          console.error(`[VibeMonkey] Error executing script ${script.name}:`, error);
           // 报告运行时错误
           browser.runtime.sendMessage({
             type: 'REPORT_ERROR',
@@ -161,7 +161,7 @@ async function runMatchedScripts(): Promise<void> {
       }
     }
   } catch (error) {
-    console.error('[VibeMokey] Failed to load/run scripts:', error);
+    console.error('[VibeMonkey] Failed to load/run scripts:', error);
   }
 }
 
@@ -225,7 +225,7 @@ async function handleExecuteImmediately(payload: { code: string }) {
 async function handleStopScript(payload: { scriptId: string }) {
   // 实际上在浏览器中停止一个已经运行的脚本很难
   // 这里可以作为一个占位，或者如果脚本注册了清理函数则调用它
-  console.log(`[VibeMokey] Stop request for script: ${payload.scriptId}`);
+  console.log(`[VibeMonkey] Stop request for script: ${payload.scriptId}`);
   return { success: true, message: 'Stop signal received. Please refresh for full effect.' };
 }
 
@@ -272,7 +272,7 @@ function handleAnalyzeDOM(payload: { keywords: string[]; weights?: Record<string
       },
     };
   } catch (error) {
-    console.error('[VibeMokey] DOM analysis error:', error);
+    console.error('[VibeMonkey] DOM analysis error:', error);
     return {
       success: false,
       elements: [],
@@ -369,7 +369,7 @@ function handleGetPageInfo(): {
       },
     };
   } catch (error) {
-    console.error('[VibeMokey] Get page info error:', error);
+    console.error('[VibeMonkey] Get page info error:', error);
     return {
       success: false,
       info: {
@@ -424,7 +424,7 @@ function handleHighlightElements(effects: { type: string; selector: string }[]):
         }, 3000);
       });
     } catch (e) {
-      console.error('[VibeMokey] Highlight error:', e);
+      console.error('[VibeMonkey] Highlight error:', e);
     }
   });
   return { success: true };

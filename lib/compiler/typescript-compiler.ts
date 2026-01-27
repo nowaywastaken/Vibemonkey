@@ -45,10 +45,10 @@ export async function initializeCompiler(): Promise<boolean> {
     await swc.default();
     initialized = true;
     
-    console.log('[VibeMokey] SWC-Wasm compiler initialized');
+    console.log('[VibeMonkey] SWC-Wasm compiler initialized');
     return true;
   } catch (error) {
-    console.error('[VibeMokey] Failed to initialize SWC-Wasm:', error);
+    console.error('[VibeMonkey] Failed to initialize SWC-Wasm:', error);
     return false;
   }
 }
@@ -101,7 +101,7 @@ export async function compileTypeScript(
       map: result.map || undefined,
     };
   } catch (error) {
-    console.error('[VibeMokey] TypeScript compilation error:', error);
+    console.error('[VibeMonkey] TypeScript compilation error:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown compilation error',
@@ -223,7 +223,7 @@ export async function compileJSX(
       map: result.map || undefined,
     };
   } catch (error) {
-    console.error('[VibeMokey] JSX compilation error:', error);
+    console.error('[VibeMonkey] JSX compilation error:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown compilation error',
@@ -267,7 +267,7 @@ export async function minifyCode(code: string): Promise<CompileResult> {
       code: result.code,
     };
   } catch (error) {
-    console.error('[VibeMokey] Minification error:', error);
+    console.error('[VibeMonkey] Minification error:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown minification error',

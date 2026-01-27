@@ -1,5 +1,5 @@
 /**
- * VibeMokey Background Service Worker
+ * VibeMonkey Background Service Worker
  * Agent 核心逻辑：协调 DOM 分析、脚本生成、记忆管理
  */
 
@@ -7,11 +7,11 @@ import { createDeepSeekClient, DeepSeekClient } from '@/lib/agent/deepseek';
 import { getAllTools } from '@/lib/agent/tools';
 import { createMem0Client, Mem0Client } from '@/lib/memory/mem0-client';
 import { createScriptRepository, ScriptRepository } from '@/lib/script/repository';
-import { generateFullScript, urlToMatchPattern, ScriptMetadata } from '@/lib/script/generator';
+import { generateFullScript, generateMetadataBlock, urlToMatchPattern, ScriptMetadata } from '@/lib/script/generator';
 import { createSelfHealingSystem, SelfHealingSystem, RuntimeError } from '@/lib/feedback/self-healing';
 import { createHistoryManager, HistoryManager, ScriptHistoryItem, HistoryFilter } from '@/lib/script/history';
 import { createCodeAuditor, CodeAuditor, AuditResult, formatAuditResult } from '@/lib/script/auditor';
-import { initializeCompiler, compileTypeScript, validateTypeScript, CompileResult } from '@/lib/compiler/typescript-compiler';
+import { initializeCompiler, compileTypeScript, compileUserScript, validateTypeScript, CompileResult } from '@/lib/compiler/typescript-compiler';
 import { createScriptManager, ScriptManager } from '@/lib/script/manager';
 import { createScriptVersionManager, ScriptVersionManager, extractMainDomain } from '@/lib/script/script-version-manager';
 import { createAgentContextBuilder, AgentContextBuilder, AgentContext } from '@/lib/agent/agent-context';
@@ -164,7 +164,7 @@ type ExtensionMessage =
   | ExecuteSandboxCodeMessage;
 
 export default defineBackground(() => {
-  console.log('[VibeMokey] Background service worker started');
+  console.log('[VibeMonkey] Background service worker started');
 
   // 初始化客户端
   initializeClients();
@@ -182,7 +182,7 @@ export default defineBackground(() => {
   // 监听长连接
   browser.runtime.onConnect.addListener((port) => {
     if (port.name === 'vibemonkey-stream') {
-      console.log('[VibeMokey] Stream port connected');
+      console.log('[VibeMonkey] Stream port connected');
       activePorts.add(port);
       
       // 获取并发送当前状态
@@ -194,7 +194,7 @@ export default defineBackground(() => {
       });
 
       port.onDisconnect.addListener(() => {
-        console.log('[VibeMokey] Stream port disconnected');
+        console.log('[VibeMonkey] Stream port disconnected');
         activePorts.delete(port);
       });
 
@@ -223,9 +223,9 @@ async function setupOffscreenDocument(path: string) {
       reasons: [chrome.offscreen.Reason.WORKERS],
       justification: 'Run QuickJS sandbox for script analysis',
     });
-    console.log('[VibeMokey] Offscreen document created');
+    console.log('[VibeMonkey] Offscreen document created');
   } catch (e) {
-    console.error('[VibeMokey] Failed to create offscreen document:', e);
+    console.error('[VibeMonkey] Failed to create offscreen document:', e);
   }
 }
 
@@ -300,9 +300,9 @@ async function initializeClients(): Promise<void> {
     // 或者尝试直接使用 offscreen.html
     await setupOffscreenDocument('entrypoints/offscreen/index.html');
 
-    console.log('[VibeMokey] Clients initialized (including version manager)');
+    console.log('[VibeMonkey] Clients initialized (including version manager)');
   } catch (error) {
-    console.error('[VibeMokey] Failed to initialize clients:', error);
+    console.error('[VibeMonkey] Failed to initialize clients:', error);
   }
 }
 
@@ -404,7 +404,7 @@ async function handleGenerateScript(payload: GenerateScriptMessage['payload']): 
         pageInfo ? { title: pageInfo.title, markdown: pageInfo.markdown || '' } : undefined,
         memoryContext
       );
-      console.log('[VibeMokey] Agent context built:', {
+      console.log('[VibeMonkey] Agent context built:', {
         domain: agentContext.currentDomain,
         activeScripts: agentContext.activeScripts.length,
         inactiveScripts: agentContext.inactiveScripts.length,
@@ -433,24 +433,35 @@ async function handleGenerateScript(payload: GenerateScriptMessage['payload']): 
 
     const scriptCode = scriptMatch[1].trim();
 
-    // 5. 生成完整的 Tampermonkey 脚本
+    // 5. 生成元数据
     const metadata: ScriptMetadata = {
-      name: extractScriptName(content) || `VibeMokey - ${domain}`,
+      name: extractScriptName(content) || `VibeMonkey - ${domain}`,
       description: userRequest.slice(0, 100),
       match: [urlToMatchPattern(currentUrl)],
       grant: ['none'],
     };
 
-    const generated = generateFullScript(metadata, scriptCode);
+    const metadataBlock = generateMetadataBlock(metadata);
 
-    // 6. 代码审计
-    let auditResult: AuditResult | undefined;
-    if (codeAuditor) {
-      auditResult = codeAuditor.audit(generated.fullScript);
-      console.log('[VibeMokey] Audit score:', auditResult.score);
+    // 6. 编译 TypeScript 为 JavaScript
+    updateAgentStatus('writing', '正在编译脚本...');
+    const compileResult = await compileUserScript(scriptCode, metadataBlock);
+    
+    if (!compileResult.success || !compileResult.code) {
+      updateAgentStatus('error', `编译失败: ${compileResult.error}`);
+      return { success: false, error: `编译失败: ${compileResult.error}` };
     }
 
-    // 7. 保存到记忆
+    const fullScript = compileResult.code;
+
+    // 7. 代码审计
+    let auditResult: AuditResult | undefined;
+    if (codeAuditor) {
+      auditResult = codeAuditor.audit(fullScript);
+      console.log('[VibeMonkey] Audit score:', auditResult.score);
+    }
+
+    // 8. 保存到记忆
     if (mem0Client) {
       await mem0Client.add(
         `为 ${domain} 生成了脚本：${metadata.name}。用户需求：${userRequest}`,
@@ -459,19 +470,19 @@ async function handleGenerateScript(payload: GenerateScriptMessage['payload']): 
       );
     }
 
-    // 8. 保存到历史记录
+    // 9. 保存到历史记录
     if (historyManager) {
       await historyManager.add({
         name: metadata.name,
         description: userRequest,
         url: currentUrl,
         domain,
-        script: generated.fullScript,
+        script: fullScript,
         userRequest,
       });
     }
 
-    // 9. 保存到版本化脚本管理器（优先使用新的版本管理器）
+    // 10. 保存到版本化脚本管理器
     if (scriptVersionManager) {
       await scriptVersionManager.addScript({
         name: metadata.name,
@@ -479,19 +490,10 @@ async function handleGenerateScript(payload: GenerateScriptMessage['payload']): 
         matchPattern: urlToMatchPattern(currentUrl),
         domain,
         code: scriptCode,  // 保存原始 TypeScript
-        compiledCode: generated.fullScript,  // 保存编译后的完整脚本
+        compiledCode: fullScript,  // 保存编译后的完整脚本
         userRequest,
       });
-      console.log('[VibeMokey] Script saved to version manager');
-    } else if (scriptManager) {
-      // 回退到旧的脚本管理器
-      await scriptManager.addScript({
-        name: metadata.name,
-        description: metadata.description,
-        code: generated.fullScript,
-        matches: metadata.match,
-      });
-      console.log('[VibeMokey] Script activated and saved (legacy)');
+      console.log('[VibeMonkey] Script saved to version manager');
     }
 
     updateAgentStatus('idle', `已成功生成脚本：${metadata.name}`);
@@ -503,7 +505,7 @@ async function handleGenerateScript(payload: GenerateScriptMessage['payload']): 
       auditScore: auditResult?.score,
     };
   } catch (error) {
-    console.error('[VibeMokey] Generate script error:', error);
+    console.error('[VibeMonkey] Generate script error:', error);
     updateAgentStatus('error', error instanceof Error ? error.message : '生成失败');
     return {
       success: false,
@@ -516,7 +518,7 @@ async function handleGenerateScript(payload: GenerateScriptMessage['payload']): 
  * 构建增强的系统提示（包含完整 Agent 上下文）
  */
 function buildEnhancedSystemPrompt(context: AgentContext | null): string {
-  let prompt = `你是 VibeMokey，一个专业的油猴脚本生成助手。你的任务是根据用户需求生成高质量的 TypeScript 脚本。
+  let prompt = `你是 VibeMonkey，一个专业的油猴脚本生成助手。你的任务是根据用户需求生成高质量的 TypeScript 脚本。
 
 生成规则：
 1. 使用稳定的 CSS 选择器（优先使用 ID、data-* 属性）
@@ -626,15 +628,29 @@ async function handleGenerateScriptStream(payload: GenerateScriptMessage['payloa
 
     const scriptCode = scriptMatch[1].trim();
 
-    // 5. 生成、审计并保存 (保持原有逻辑)
+    // 5. 生成、审计并保存
     const metadata: ScriptMetadata = {
-      name: extractScriptName(fullAssistantContent) || `VibeMokey - ${domain}`,
+      name: extractScriptName(fullAssistantContent) || `VibeMonkey - ${domain}`,
       description: userRequest.slice(0, 100),
       match: [urlToMatchPattern(currentUrl)],
       grant: ['none'],
     };
 
-    const generated = generateFullScript(metadata, scriptCode);
+    const metadataBlock = generateMetadataBlock(metadata);
+    
+    updateAgentStatus('writing', '正在编译脚本...');
+    const compileResult = await compileUserScript(scriptCode, metadataBlock);
+    
+    if (!compileResult.success || !compileResult.code) {
+      updateAgentStatus('error', `编译失败: ${compileResult.error}`);
+      broadcastMessage({
+        type: 'SCRIPT_GENERATION_ERROR',
+        payload: `编译失败: ${compileResult.error}`
+      });
+      return;
+    }
+
+    const fullScript = compileResult.code;
     
     if (mem0Client) {
       await mem0Client.add(
@@ -651,7 +667,7 @@ async function handleGenerateScriptStream(payload: GenerateScriptMessage['payloa
         matchPattern: urlToMatchPattern(currentUrl),
         domain,
         code: scriptCode,
-        compiledCode: generated.fullScript,
+        compiledCode: fullScript,
         userRequest,
       });
     }
@@ -662,14 +678,14 @@ async function handleGenerateScriptStream(payload: GenerateScriptMessage['payloa
       type: 'SCRIPT_GENERATION_COMPLETE',
       payload: {
         success: true,
-        script: generated.fullScript,
+        script: fullScript,
         metadata
       }
     });
 
   } catch (error) {
     stopKeepAlive();
-    console.error('[VibeMokey] Agent loop error:', error);
+    console.error('[VibeMonkey] Agent loop error:', error);
     updateAgentStatus('error', error instanceof Error ? error.message : '生成失败');
     broadcastMessage({
       type: 'SCRIPT_GENERATION_ERROR',
@@ -682,7 +698,7 @@ async function handleGenerateScriptStream(payload: GenerateScriptMessage['payloa
  * 构建系统提示
  */
 function buildSystemPrompt(existingScripts: { name: string; description: string }[], memoryContext: string): string {
-  let prompt = `你是 VibeMokey，一个专业的油猴脚本生成助手。你的任务是根据用户需求生成高质量的 Tampermonkey 兼容脚本。
+  let prompt = `你是 VibeMonkey，一个专业的油猴脚本生成助手。你的任务是根据用户需求生成高质量的 Tampermonkey 兼容脚本。
 
 生成规则：
 1. 使用稳定的 CSS 选择器（优先使用 ID、data-* 属性）
@@ -753,7 +769,7 @@ async function handleAnalyzeDOM(payload: AnalyzeDOMMessage['payload']): Promise<
     });
     return result;
   } catch (error) {
-    console.error('[VibeMokey] Analyze DOM error:', error);
+    console.error('[VibeMonkey] Analyze DOM error:', error);
     return { error: 'DOM 分析失败' };
   }
 }
@@ -765,7 +781,7 @@ function handleReportError(error: RuntimeError): { success: boolean } {
   if (healingSystem) {
     healingSystem.recordError(error);
     const actions = healingSystem.analyzeError(error);
-    console.log('[VibeMokey] Healing actions:', actions);
+    console.log('[VibeMonkey] Healing actions:', actions);
   }
   return { success: true };
 }
@@ -798,7 +814,7 @@ async function handleSaveApiKey(payload: SaveApiKeyMessage['payload']): Promise<
     }
     return { success: true };
   } catch (error) {
-    console.error('[VibeMokey] Save API key error:', error);
+    console.error('[VibeMonkey] Save API key error:', error);
     return { success: false };
   }
 }
@@ -818,7 +834,7 @@ async function handleGetHistory(filter?: HistoryFilter): Promise<{
     const history = await historyManager.search(filter || {});
     return { success: true, history };
   } catch (error) {
-    console.error('[VibeMokey] Get history error:', error);
+    console.error('[VibeMonkey] Get history error:', error);
     return { success: false, history: [] };
   }
 }
@@ -835,7 +851,7 @@ async function handleDeleteHistory(id: string): Promise<{ success: boolean }> {
     await historyManager.delete(id);
     return { success: true };
   } catch (error) {
-    console.error('[VibeMokey] Delete history error:', error);
+    console.error('[VibeMonkey] Delete history error:', error);
     return { success: false };
   }
 }
@@ -857,7 +873,7 @@ function handleAuditScript(code: string): {
     const formatted = formatAuditResult(result);
     return { success: true, result, formatted };
   } catch (error) {
-    console.error('[VibeMokey] Audit script error:', error);
+    console.error('[VibeMonkey] Audit script error:', error);
     return { success: false };
   }
 }
@@ -882,7 +898,7 @@ async function handleCompileTypeScript(payload: {
       error: result.error,
     };
   } catch (error) {
-    console.error('[VibeMokey] Compile TypeScript error:', error);
+    console.error('[VibeMonkey] Compile TypeScript error:', error);
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
@@ -906,7 +922,7 @@ async function handleValidateTypeScript(code: string): Promise<{
       errors: result.errors,
     };
   } catch (error) {
-    console.error('[VibeMokey] Validate TypeScript error:', error);
+    console.error('[VibeMonkey] Validate TypeScript error:', error);
     return {
       success: false,
       valid: false,
@@ -927,7 +943,7 @@ async function handleGetMatchingScripts(url: string): Promise<{ success: boolean
     const scripts = await scriptManager.getScriptsForUrl(url);
     return { success: true, scripts };
   } catch (error) {
-    console.error('[VibeMokey] Get matching scripts error:', error);
+    console.error('[VibeMonkey] Get matching scripts error:', error);
     return { success: false, scripts: [] };
   }
 }
@@ -959,7 +975,7 @@ async function handleGetScriptList(url: string): Promise<{
       ...result,
     };
   } catch (error) {
-    console.error('[VibeMokey] Get script list error:', error);
+    console.error('[VibeMonkey] Get script list error:', error);
     return {
       success: false,
       domain: '',
@@ -988,7 +1004,7 @@ async function handleToggleScript(payload: { scriptId: string; enabled: boolean 
     }
     return { success: !!script, script };
   } catch (error) {
-    console.error('[VibeMokey] Toggle script error:', error);
+    console.error('[VibeMonkey] Toggle script error:', error);
     return { success: false };
   }
 }

@@ -78,7 +78,7 @@ export class UserscriptZoneClient {
         total: scripts.length,
       };
     } catch (error) {
-      console.error('[VibeMokey] Userscript.Zone search error:', error);
+      console.error('[VibeMonkey] Userscript.Zone search error:', error);
       return { success: false, scripts: [], total: 0 };
     }
   }
@@ -137,7 +137,7 @@ export class UserscriptZoneClient {
         total: scripts.length,
       };
     } catch (error) {
-      console.error('[VibeMokey] Userscript.Zone popular error:', error);
+      console.error('[VibeMonkey] Userscript.Zone popular error:', error);
       return { success: false, scripts: [], total: 0 };
     }
   }

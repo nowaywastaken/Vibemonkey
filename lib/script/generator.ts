@@ -31,7 +31,7 @@ export function generateMetadataBlock(metadata: ScriptMetadata): string {
   lines.push(`// @namespace    ${metadata.namespace || 'https://vibemonkey.local'}`);
   lines.push(`// @version      ${metadata.version || '1.0.0'}`);
   lines.push(`// @description  ${metadata.description}`);
-  lines.push(`// @author       ${metadata.author || 'VibeMokey Agent'}`);
+  lines.push(`// @author       ${metadata.author || 'VibeMonkey Agent'}`);
 
   for (const pattern of metadata.match) {
     lines.push(`// @match        ${pattern}`);
@@ -201,7 +201,7 @@ waitForElement('${targetSelector}').then(target => {
 
   target.parentNode.insertBefore(button, target.nextSibling);
 }).catch(err => {
-  console.error('VibeMokey:', err);
+  console.error('VibeMonkey:', err);
 });`;
 }
 
@@ -217,7 +217,7 @@ waitForElement('${selector}').then(element => {
     element.click();
   }, ${delay});` : 'element.click();'}
 }).catch(err => {
-  console.error('VibeMokey:', err);
+  console.error('VibeMonkey:', err);
 });`;
 }
 
@@ -245,6 +245,6 @@ ${generateWaitForElement(selector)}
 waitForElement('${selector}').then(element => {
   element.textContent = '${newText}';
 }).catch(err => {
-  console.error('VibeMokey:', err);
+  console.error('VibeMonkey:', err);
 });`;
 }

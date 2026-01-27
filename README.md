@@ -1,4 +1,4 @@
-# VibeMokey 🐵
+# VibeMonkey 🐵
 
 > 智能油猴脚本生成 Chrome 扩展 - 基于 DeepSeek V3.2 与 Mem0 记忆系统
 
