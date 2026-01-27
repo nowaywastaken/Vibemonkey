@@ -15,6 +15,7 @@ import { initializeCompiler, compileTypeScript, validateTypeScript, CompileResul
 import { createScriptManager, ScriptManager } from '@/lib/script/manager';
 import { createScriptVersionManager, ScriptVersionManager, extractMainDomain } from '@/lib/script/script-version-manager';
 import { createAgentContextBuilder, AgentContextBuilder, AgentContext } from '@/lib/agent/agent-context';
+import { startKeepAlive, stopKeepAlive, setupKeepAliveListener, triggerHeartbeat } from '@/lib/keepalive';
 
 // 全局状态
 let deepseekClient: DeepSeekClient | null = null;
@@ -169,6 +170,7 @@ export default defineBackground(() => {
   initializeClients();
   
   // 启动保活
+  setupKeepAliveListener();
   startKeepAlive();
 
   // 消息监听器
@@ -204,31 +206,7 @@ export default defineBackground(() => {
       });
     }
   });
-
-  // P2: MV3 持久化 - 心跳机制
-  browser.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === 'keep-alive') {
-      // console.log('[VibeMokey] Keep-alive alarm triggered');
-      // 执行一个轻量级操作以重置计时器
-      void browser.runtime.getPlatformInfo();
-    }
-  });
 });
-
-/**
- * 启动保活心跳
- */
-function startKeepAlive() {
-  // 每 20 秒触发一次，防止 30s 暂停
-  browser.alarms.create('keep-alive', { periodInMinutes: 20 / 60 });
-}
-
-/**
- * 停止保活心跳
- */
-function stopKeepAlive() {
-  browser.alarms.clear('keep-alive');
-}
 
 /**
  * 初始化 Offscreen 文档
@@ -263,6 +241,9 @@ const activePorts = new Set<any>();
  * 广播消息给所有活跃端口
  */
 function broadcastMessage(message: any) {
+  // Communication Patch (MV3): Heartbeat Reset
+  triggerHeartbeat();
+  
   activePorts.forEach(port => {
     try {
       port.postMessage(message);
