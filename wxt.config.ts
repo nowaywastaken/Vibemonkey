@@ -19,4 +19,9 @@ export default defineConfig({
     },
   },
   modules: ['@wxt-dev/module-react'],
+  dev: {
+    server: {
+      hostname: '0.0.0.0',
+    },
+  },
 });
