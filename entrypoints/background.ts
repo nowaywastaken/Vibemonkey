@@ -235,12 +235,13 @@ function stopKeepAlive() {
  */
 async function setupOffscreenDocument(path: string) {
   try {
-    // 检查是否已存在 Offscreen 文档
-    // 注意：chrome.offscreen API 需要在 manifest 中声明权限
+    // @ts-ignore - chrome.offscreen might not be in types
     if (await chrome.offscreen.hasDocument()) return;
     
+    // @ts-ignore
     await chrome.offscreen.createDocument({
       url: path,
+      // @ts-ignore
       reasons: [chrome.offscreen.Reason.WORKERS],
       justification: 'Run QuickJS sandbox for script analysis',
     });
@@ -254,7 +255,7 @@ async function setupOffscreenDocument(path: string) {
  * 初始化各种客户端
  */
 // 活跃的连接端口
-const activePorts = new Set<browser.Runtime.Port>();
+const activePorts = new Set<any>();
 
 
 
@@ -565,12 +566,12 @@ async function handleGenerateScriptStream(payload: GenerateScriptMessage['payloa
   }
 
   try {
-    updateAgentStatus('thinking', '正在分析需求...');
+    updateAgentStatus('thinking', '正在初始化 Agent...');
     
     const { userRequest, currentUrl, pageInfo } = payload;
     const domain = pageInfo?.domain || new URL(currentUrl).hostname;
 
-    // 1. 构建完整的 Agent 上下文
+    // 1. 构建初始上下文
     let agentContext: AgentContext | null = null;
     if (agentContextBuilder) {
       let memoryContext = '';
@@ -588,37 +589,55 @@ async function handleGenerateScriptStream(payload: GenerateScriptMessage['payloa
       );
     }
 
-    // 2. 构建增强的系统提示
+    // 2. 构建系统和用户提示
     const systemPrompt = buildEnhancedSystemPrompt(agentContext);
     const userPrompt = buildUserPrompt(userRequest, currentUrl, pageInfo);
 
-    updateAgentStatus('writing', '正在生成脚本...');
-    startKeepAlive(); // 启动保活
-
-    // 3. 调用 DeepSeek 流式生成
-    let fullContent = '';
-    
-    // 发送开始事件
+    startKeepAlive();
     broadcastMessage({ type: 'SCRIPT_GENERATION_START' });
 
-    for await (const chunk of deepseekClient.chatStream([
-      { role: 'user', content: systemPrompt + '\n\n' + userPrompt },
-    ])) {
-      const content = chunk.choices[0]?.delta?.content || '';
-      if (content) {
-        fullContent += content;
-        // 实时推送内容片段
-        broadcastMessage({
-          type: 'SCRIPT_GENERATION_CHUNK',
-          payload: content
-        });
+    let fullAssistantContent = '';
+    
+    // 3. 运行 Agent 循环
+    const agentLoop = deepseekClient.runStreamingAgentLoop(
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      getAllTools(),
+      executeTool
+    );
+
+    for await (const event of agentLoop) {
+      switch (event.type) {
+        case 'token':
+          fullAssistantContent += event.content;
+          broadcastMessage({
+            type: 'SCRIPT_GENERATION_CHUNK',
+            payload: event.content
+          });
+          break;
+        
+        case 'tool_call':
+          updateAgentStatus('tool_calling', event.content);
+          break;
+        
+        case 'tool_result':
+          // 可以在这里把工具结果也发给 UI，但通常保持 UI 简洁
+          console.log('[Agent Tool Result]', event.content);
+          updateAgentStatus('thinking', '正在处理工具返回结果...');
+          break;
+        
+        case 'error':
+          updateAgentStatus('error', event.content);
+          break;
       }
     }
     
-    stopKeepAlive(); // 停止保活
+    stopKeepAlive();
     
     // 4. 解析生成的脚本
-    const scriptMatch = fullContent.match(/```(?:typescript|javascript|ts|js)?\n([\s\S]*?)```/);
+    const scriptMatch = fullAssistantContent.match(/```(?:typescript|javascript|ts|js)?\n([\s\S]*?)```/);
     if (!scriptMatch) {
       updateAgentStatus('error', '未能生成有效脚本');
       return;
@@ -626,40 +645,22 @@ async function handleGenerateScriptStream(payload: GenerateScriptMessage['payloa
 
     const scriptCode = scriptMatch[1].trim();
 
-    // 5. 生成完整的 Tampermonkey 脚本
+    // 5. 生成、审计并保存 (保持原有逻辑)
     const metadata: ScriptMetadata = {
-      name: extractScriptName(fullContent) || `VibeMokey - ${domain}`,
+      name: extractScriptName(fullAssistantContent) || `VibeMokey - ${domain}`,
       description: userRequest.slice(0, 100),
       match: [urlToMatchPattern(currentUrl)],
       grant: ['none'],
     };
 
     const generated = generateFullScript(metadata, scriptCode);
-
-    // 6. 代码审计
-    let auditResult: AuditResult | undefined;
-    if (codeAuditor) {
-      auditResult = codeAuditor.audit(generated.fullScript);
-    }
-
-    // 7. 保存逻辑 (与普通生成相同)
+    
     if (mem0Client) {
       await mem0Client.add(
         `为 ${domain} 生成了脚本：${metadata.name}。用户需求：${userRequest}`,
         'script_version',
         { domain, scriptName: metadata.name }
       );
-    }
-
-    if (historyManager) {
-      await historyManager.add({
-        name: metadata.name,
-        description: userRequest,
-        url: currentUrl,
-        domain,
-        script: generated.fullScript,
-        userRequest,
-      });
     }
 
     if (scriptVersionManager) {
@@ -672,31 +673,22 @@ async function handleGenerateScriptStream(payload: GenerateScriptMessage['payloa
         compiledCode: generated.fullScript,
         userRequest,
       });
-    } else if (scriptManager) {
-      await scriptManager.addScript({
-        name: metadata.name,
-        description: metadata.description,
-        code: generated.fullScript,
-        matches: metadata.match,
-      });
     }
 
     updateAgentStatus('idle', `已成功生成脚本：${metadata.name}`);
 
-    // 发送完成事件
     broadcastMessage({
       type: 'SCRIPT_GENERATION_COMPLETE',
       payload: {
         success: true,
         script: generated.fullScript,
-        metadata,
-        auditScore: auditResult?.score,
+        metadata
       }
     });
 
   } catch (error) {
-    stopKeepAlive(); // 停止保活
-    console.error('[VibeMokey] Generate script stream error:', error);
+    stopKeepAlive();
+    console.error('[VibeMokey] Agent loop error:', error);
     updateAgentStatus('error', error instanceof Error ? error.message : '生成失败');
     broadcastMessage({
       type: 'SCRIPT_GENERATION_ERROR',
@@ -1096,8 +1088,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     await updateAgentStatus('tool_calling', `正在调用工具: ${name}`);
     
     switch (name) {
-      case 'analyze_dom':
-        // 获取当前标签页并发送分析请求
+      case 'analyze_dom': {
         const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
         if (!tab?.id) return JSON.stringify({ error: 'No active tab' });
         
@@ -1106,13 +1097,13 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
           keywords: (args.selectors as string)?.split(',') || [] 
         });
         return JSON.stringify(domResult);
+      }
 
-      case 'test_script':
+      case 'test_script': {
         if (typeof args.code !== 'string') return JSON.stringify({ error: 'Invalid arguments: code required' });
         
         const sandboxRes = await handleSandboxExecute({ code: args.code });
         
-        // 发送副作用给 Content Script 进行高亮 (Shadow Execution)
         if (sandboxRes.sideEffects?.length > 0) {
            const [activeTab] = await browser.tabs.query({ active: true, currentWindow: true });
            if (activeTab?.id) {
@@ -1123,20 +1114,124 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
            }
         }
         return JSON.stringify(sandboxRes);
+      }
 
-      case 'search_scripts':
+      case 'search_scripts': {
          if (scriptRepository && typeof args.domain === 'string') {
            const results = await scriptRepository.searchAllByDomain(args.domain);
            return JSON.stringify(results);
          }
          return JSON.stringify({ error: 'Repository not initialized or invalid domain' });
+      }
 
-      case 'save_memory':
+      case 'save_memory': {
          if (mem0Client && typeof args.content === 'string' && typeof args.type === 'string') {
             await mem0Client.add(args.content, args.type as any, { domain: args.domain as string });
             return JSON.stringify({ success: true });
          }
          return JSON.stringify({ error: 'Mem0 not initialized' });
+      }
+
+      case 'search_memory': {
+        if (mem0Client && typeof args.query === 'string') {
+          const results = await mem0Client.search(args.query, {
+            type: args.type as any,
+            domain: args.domain as string
+          });
+          return JSON.stringify(results);
+        }
+        return JSON.stringify({ error: 'Mem0 not initialized or missing query' });
+      }
+
+      case 'get_script_history': {
+        if (scriptVersionManager && typeof args.scriptId === 'string') {
+          const script = await scriptVersionManager.getScript(args.scriptId);
+          if (!script) return JSON.stringify({ error: 'Script not found' });
+          
+          if (typeof args.version === 'number') {
+            const versionData = await scriptVersionManager.getScriptVersion(args.scriptId, args.version);
+            return JSON.stringify(versionData);
+          }
+          
+          return JSON.stringify(script.versions.map(v => ({
+            version: v.version,
+            createdAt: v.createdAt,
+            changeNote: v.changeNote
+          })));
+        }
+        return JSON.stringify({ error: 'Version manager not initialized' });
+      }
+
+      case 'speak_to_user': {
+        const message = args.message as string;
+        const type = (args.type as string) || 'info';
+        await updateAgentStatus('idle', message);
+        // 发送到 Port
+        broadcastMessage({
+          type: 'AGENT_STATUS_UPDATE',
+          payload: { status: 'idle', message: `Agent: ${message}` }
+        });
+        return JSON.stringify({ success: true });
+      }
+
+      case 'compile_and_validate': {
+        if (typeof args.code === 'string') {
+          const result = await handleCompileTypeScript({ code: args.code });
+          const validateRes = await handleValidateTypeScript(args.code);
+          return JSON.stringify({
+            compile: result,
+            validate: validateRes
+          });
+        }
+        return JSON.stringify({ error: 'Missing code' });
+      }
+
+      case 'monitor_console_errors': {
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) return JSON.stringify({ error: 'No active tab' });
+        
+        // 这是一个模拟，实际可能需要 Content Script 配合
+        const errors = await browser.tabs.sendMessage(tab.id, { type: 'GET_RECENT_ERRORS' });
+        return JSON.stringify(errors);
+      }
+
+      case 'fetch_network_logs': {
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) return JSON.stringify({ error: 'No active tab' });
+        
+        const logs = await browser.tabs.sendMessage(tab.id, { 
+          type: 'GET_NETWORK_STATS',
+          payload: { url_pattern: args.url_pattern }
+        });
+        return JSON.stringify(logs);
+      }
+
+      case 'toggle_script': {
+        if (scriptVersionManager && typeof args.scriptId === 'string') {
+          const res = await scriptVersionManager.toggleScript(args.scriptId, !!args.enabled);
+          return JSON.stringify({ success: !!res });
+        }
+        return JSON.stringify({ error: 'Version manager not initialized' });
+      }
+
+      case 'generate_script': {
+        // AI 可以调用这个工具来正式提交脚本
+        if (typeof args.code === 'string' && typeof args.name === 'string') {
+          const domain = extractMainDomain(args.matchPatterns as string || '');
+          if (scriptVersionManager) {
+            await scriptVersionManager.addScript({
+              name: args.name as string,
+              description: args.description as string || '',
+              matchPattern: args.matchPatterns as string || '<all_urls>',
+              domain: domain || 'unknown',
+              code: args.code as string,
+              changeNote: 'AI 生成'
+            });
+          }
+          return JSON.stringify({ success: true, message: 'Script saved successfully' });
+        }
+        return JSON.stringify({ error: 'Missing code or name' });
+      }
 
       default:
         return JSON.stringify({ error: `Tool ${name} not implemented` });

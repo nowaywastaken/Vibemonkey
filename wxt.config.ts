@@ -11,6 +11,7 @@ export default defineConfig({
       'scripting',
       'tabs',
       'alarms',
+      'offscreen',
     ],
     host_permissions: ['<all_urls>'],
     content_security_policy: {

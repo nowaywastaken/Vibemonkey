@@ -20,6 +20,11 @@ interface GetPageInfoRequest {
   type: 'GET_PAGE_INFO';
 }
 
+interface GetRecentErrorsRequest {
+
+  type: 'GET_RECENT_ERRORS';
+}
+
 interface GetNetworkStatsRequest {
   type: 'GET_NETWORK_STATS';
 }
@@ -29,17 +34,46 @@ interface HighlightElementsRequest {
   payload: { type: string; selector: string }[];
 }
 
-type ContentMessage = AnalyzeDOMRequest | GetPageInfoRequest | GetNetworkStatsRequest | HighlightElementsRequest;
+type ContentMessage = 
+  | AnalyzeDOMRequest 
+  | GetPageInfoRequest 
+  | GetNetworkStatsRequest 
+  | GetRecentErrorsRequest 
+  | HighlightElementsRequest;
 
 // 网络监控器实例
 let networkMonitor: ReturnType<typeof setupNetworkMonitor> | null = null;
-// ... (keep main function same) ...
+// 错误历史
+const recentErrors: RuntimeError[] = [];
+
+export default defineContentScript({
+  matches: ['<all_urls>'],
+  main() {
+    console.log('[VibeMokey] Content script loaded');
+
+    // 初始化网络监控
+    networkMonitor = setupNetworkMonitor();
+
+    // 初始化错误捕获
+    setupConsoleCapture((error) => {
+      recentErrors.push(error);
+      if (recentErrors.length > 50) recentErrors.shift();
+      
+      // 报告给后台
+      browser.runtime.sendMessage({
+        type: 'REPORT_ERROR',
+        payload: error
+      }).catch(() => {});
+    });
+
     // 监听来自 Background 的消息
     browser.runtime.onMessage.addListener((message: ContentMessage, sender, sendResponse) => {
       handleMessage(message).then(sendResponse);
       return true;
     });
-// ...
+  },
+});
+
 /**
  * 处理消息
  */
@@ -53,6 +87,16 @@ async function handleMessage(message: ContentMessage): Promise<unknown> {
 
     case 'HIGHLIGHT_ELEMENTS':
       return handleHighlightElements(message.payload);
+    
+    case 'GET_RECENT_ERRORS':
+      return { success: true, errors: recentErrors };
+
+    case 'GET_NETWORK_STATS':
+      return { 
+        success: true, 
+        stats: networkMonitor?.getStats(),
+        failedRequests: networkMonitor?.getFailedRequests()
+      };
     
     default:
       return { error: 'Unknown message type' };

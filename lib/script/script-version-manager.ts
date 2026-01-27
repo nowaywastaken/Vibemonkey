@@ -55,6 +55,7 @@ export class ScriptVersionManager {
     code: string;
     compiledCode?: string;
     userRequest?: string;
+    changeNote?: string;
   }): Promise<VersionedScript> {
     const scripts = await this.getAllScripts();
     
@@ -71,7 +72,7 @@ export class ScriptVersionManager {
         compiledCode: script.compiledCode,
         createdAt: Date.now(),
         userRequest: script.userRequest,
-        changeNote: '初始版本',
+        changeNote: script.changeNote || '初始版本',
       }],
       enabled: true,
       createdAt: Date.now(),

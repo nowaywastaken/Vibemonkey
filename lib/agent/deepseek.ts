@@ -246,6 +246,84 @@ export class DeepSeekClient {
 
     throw new Error('Agent loop exceeded maximum iterations');
   }
+
+  /**
+   * 执行流式 Agent 循环
+   */
+  async *runStreamingAgentLoop(
+    messages: Message[],
+    tools: Tool[],
+    executeToolCall: (name: string, args: Record<string, unknown>) => Promise<string>,
+    maxIterations = 10
+  ): AsyncGenerator<{ type: 'token' | 'tool_call' | 'tool_result' | 'error'; content: string }> {
+    let currentMessages = [...messages];
+    
+    for (let i = 0; i < maxIterations; i++) {
+      const responseStream = this.chatStream(currentMessages, tools);
+      let assistantContent = '';
+      let toolCalls: ToolCall[] = [];
+
+      for await (const event of responseStream) {
+        const delta = event.choices[0]?.delta;
+        if (!delta) continue;
+
+        if (delta.content) {
+          assistantContent += delta.content;
+          yield { type: 'token', content: delta.content };
+        }
+
+        if (delta.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            if (tc.id) {
+               toolCalls.push(tc);
+            } else if (toolCalls.length > 0) {
+               // Append to last tool call arguments
+               const last = toolCalls[toolCalls.length - 1];
+               last.function.arguments += tc.function.arguments || '';
+            }
+          }
+        }
+      }
+
+      // 添加助手消息到上下文
+      currentMessages.push({
+        role: 'assistant',
+        content: assistantContent,
+        // 如果有 tool_calls，通常需要在消息中包含它们，但 OpenRouter/DeepSeek 的格式可能略有不同
+        // 这里简化处理，如果最终没有 content 只有 tool_calls，我们也记录下来
+      });
+
+      if (toolCalls.length === 0) {
+        // 无工具调用，循环结束
+        return;
+      }
+
+      // 处理所有的工具调用
+      for (const toolCall of toolCalls) {
+        yield { type: 'tool_call', content: `调用工具: ${toolCall.function.name}` };
+        
+        let result = '';
+        try {
+          const args = JSON.parse(toolCall.function.arguments);
+          result = await executeToolCall(toolCall.function.name, args);
+        } catch (e) {
+          result = JSON.stringify({ error: `Tool execution failed: ${e}` });
+        }
+        
+        yield { type: 'tool_result', content: result };
+        
+        currentMessages.push({
+          role: 'tool',
+          content: result,
+          tool_call_id: toolCall.id,
+        });
+      }
+      
+      // 继续下一轮循环，LLM 会基于工具结果继续生成
+    }
+
+    yield { type: 'error', content: 'Agent loop exceeded maximum iterations' };
+  }
 }
 
 /**
