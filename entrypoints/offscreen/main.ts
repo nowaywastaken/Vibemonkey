@@ -46,61 +46,94 @@ function executeSafe(payload: { code: string; context?: any }) {
         logHandle.dispose();
         consoleHandle.dispose();
 
+        // Helper to create a trap-all mock element
+        const createMockElement = (selector: string) => {
+            const el = vm.newObject();
+            
+            // Methods
+            const removeHandle = vm.newFunction("remove", () => {
+                sideEffects.push({ type: 'remove', selector });
+            });
+            vm.setProp(el, "remove", removeHandle);
+            removeHandle.dispose();
+            
+            const clickHandle = vm.newFunction("click", () => {
+                sideEffects.push({ type: 'click', selector });
+            });
+            vm.setProp(el, "click", clickHandle);
+            clickHandle.dispose();
+
+            const addEventListenerHandle = vm.newFunction("addEventListener", (typeHandle) => {
+                sideEffects.push({ type: 'addEventListener', selector, event: vm.getString(typeHandle) });
+            });
+            vm.setProp(el, "addEventListener", addEventListenerHandle);
+            addEventListenerHandle.dispose();
+
+            const setAttributeHandle = vm.newFunction("setAttribute", (nameHandle, valueHandle) => {
+                sideEffects.push({ type: 'setAttribute', selector, name: vm.getString(nameHandle), value: vm.getString(valueHandle) });
+            });
+            vm.setProp(el, "setAttribute", setAttributeHandle);
+            setAttributeHandle.dispose();
+
+            // Properties (Mocking common ones as empty strings or objects)
+            vm.setProp(el, "innerText", vm.newString(""));
+            vm.setProp(el, "innerHTML", vm.newString(""));
+            vm.setProp(el, "textContent", vm.newString(""));
+            vm.setProp(el, "value", vm.newString(""));
+            vm.setProp(el, "className", vm.newString(""));
+            
+            const styleHandle = vm.newObject();
+            vm.setProp(el, "style", styleHandle);
+            styleHandle.dispose();
+
+            const classListHandle = vm.newObject();
+            const addClassHandle = vm.newFunction("add", (cls) => {
+                sideEffects.push({ type: 'classList_add', selector, class: vm.getString(cls) });
+            });
+            vm.setProp(classListHandle, "add", addClassHandle);
+            addClassHandle.dispose();
+            vm.setProp(el, "classList", classListHandle);
+            classListHandle.dispose();
+
+            return el;
+        };
+
         // Mock document and basic DOM API for Shadow Execution
         const documentHandle = vm.newObject();
         
         // Mock querySelector
         const querySelectorHandle = vm.newFunction("querySelector", (selectorHandle) => {
             const selector = vm.getString(selectorHandle);
-            
-            // Return a mock element that traps actions
-            const elementHandle = vm.newObject();
-            
-            // Mock .remove()
-            const removeHandle = vm.newFunction("remove", () => {
-                sideEffects.push({ type: 'remove', selector });
-            });
-            vm.setProp(elementHandle, "remove", removeHandle);
-            removeHandle.dispose();
-            
-            // Mock .click()
-            const clickHandle = vm.newFunction("click", () => {
-                sideEffects.push({ type: 'click', selector });
-            });
-            vm.setProp(elementHandle, "click", clickHandle);
-            clickHandle.dispose();
-
-            // Mock .style
-            const styleHandle = vm.newObject();
-            vm.setProp(elementHandle, "style", styleHandle);
-            styleHandle.dispose();
-
-            return elementHandle;
+            return createMockElement(selector);
         });
         
         vm.setProp(documentHandle, "querySelector", querySelectorHandle);
         querySelectorHandle.dispose();
 
-        // Mock querySelectorAll (simplified: returns array of one mock element)
+        // Mock querySelectorAll
         const querySelectorAllHandle = vm.newFunction("querySelectorAll", (selectorHandle) => {
              const selector = vm.getString(selectorHandle);
              const arrayHandle = vm.newArray();
-             
-             // Create one mock element
-             const elementHandle = vm.newObject();
-             const removeHandle = vm.newFunction("remove", () => {
-                sideEffects.push({ type: 'remove', selector });
-             });
-             vm.setProp(elementHandle, "remove", removeHandle);
-             removeHandle.dispose();
-             
-             vm.setProp(arrayHandle, 0, elementHandle);
-             elementHandle.dispose();
-             
+             const el = createMockElement(selector);
+             vm.setProp(arrayHandle, 0, el);
+             el.dispose();
              return arrayHandle;
         });
         vm.setProp(documentHandle, "querySelectorAll", querySelectorAllHandle);
         querySelectorAllHandle.dispose();
+
+        // Mock createElement
+        const createElementHandle = vm.newFunction("createElement", (tagHandle) => {
+            const tag = vm.getString(tagHandle);
+            return createMockElement(`<${tag}>`);
+        });
+        vm.setProp(documentHandle, "createElement", createElementHandle);
+        createElementHandle.dispose();
+
+        // Mock body
+        const bodyHandle = createMockElement("body");
+        vm.setProp(documentHandle, "body", bodyHandle);
+        bodyHandle.dispose();
 
         // Mock addEventListener
         const addEventListenerHandle = vm.newFunction("addEventListener", (typeHandle, listenerHandle) => {

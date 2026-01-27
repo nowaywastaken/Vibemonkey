@@ -72,44 +72,46 @@ export class DOMPruner {
    * 阶段1：规则过滤 - 移除无关元素
    */
   pruneDecorative(doc: Document, styleSourceDoc?: Document): void {
-    // 移除无意义标签
+    const allElements = doc.querySelectorAll('*');
+    
+    // 1. 标记隐藏元素（在移除任何节点之前，确保索引匹配）
+    if (!this.options.includeHidden) {
+      allElements.forEach((el, index) => {
+        let isHidden = false;
+        
+        if (styleSourceDoc) {
+          const sourceEl = styleSourceDoc.querySelectorAll('*')[index];
+          if (sourceEl) {
+            try {
+              const style = getComputedStyle(sourceEl);
+              isHidden = style.display === 'none' || style.visibility === 'hidden' || (style.opacity === '0' && style.filter === 'none');
+            } catch (e) {}
+          }
+        } else {
+          try {
+            const style = getComputedStyle(el);
+            isHidden = style.display === 'none' || style.visibility === 'hidden' || (style.opacity === '0' && style.filter === 'none');
+          } catch (e) {}
+        }
+
+        if (isHidden) {
+          el.setAttribute('data-vibemonkey-prune', 'hidden');
+        }
+      });
+    }
+
+    // 2. 移除无意义标签
     for (const tag of PRUNE_TAGS) {
       const elements = doc.querySelectorAll(tag);
       elements.forEach(el => el.remove());
     }
 
-    // 移除隐藏元素
-    if (!this.options.includeHidden) {
-      const allElements = doc.querySelectorAll('*');
-      allElements.forEach((el, index) => {
-        let isHidden = false;
-        
-        // 如果提供了样式来源文档（即原始文档），则从那里获取样式
-        if (styleSourceDoc) {
-          const sourceEl = styleSourceDoc.querySelectorAll('*')[index];
-          if (sourceEl) {
-            const style = getComputedStyle(sourceEl);
-            isHidden = style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0';
-          }
-        } else {
-          // 否则尝试直接获取（仅在非克隆文档中有效）
-          try {
-            const style = getComputedStyle(el);
-            isHidden = style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0';
-          } catch (e) {
-            // 在克隆文档中 getComputedStyle 可能抛错或无效
-          }
-        }
+    // 3. 移除标记为隐藏的元素
+    doc.querySelectorAll('[data-vibemonkey-prune="hidden"]').forEach(el => el.remove());
 
-        if (isHidden) {
-          el.remove();
-        }
-      });
-    }
-
-    // 移除空元素（除非是交互性的或包含特定属性）
-    const allElements = doc.querySelectorAll('*');
-    allElements.forEach(el => {
+    // 4. 移除空元素（除非是交互性的或包含特定属性）
+    const remainingElements = doc.querySelectorAll('*');
+    remainingElements.forEach(el => {
       const hasText = !!el.textContent?.trim();
       const isInteractive = INTERACTIVE_TAGS.includes(el.tagName.toLowerCase());
       const hasImportantAttr = el.hasAttribute('id') || el.hasAttribute('name') || el.hasAttribute('role');
