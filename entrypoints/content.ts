@@ -13,6 +13,24 @@ interface AnalyzeDOMRequest {
   type: 'ANALYZE_DOM_REQUEST';
   payload: {
     keywords: string[];
+    weights?: Record<string, number>;
+    topN?: number;
+  };
+}
+
+interface FindElementsRequest {
+  type: 'FIND_ELEMENTS';
+  payload: {
+    keywords: string[];
+    weights?: Record<string, number>;
+    topN?: number;
+  };
+}
+
+interface InspectElementRequest {
+  type: 'INSPECT_ELEMENT';
+  payload: {
+    selector: string;
   };
 }
 
@@ -21,12 +39,14 @@ interface GetPageInfoRequest {
 }
 
 interface GetRecentErrorsRequest {
-
   type: 'GET_RECENT_ERRORS';
 }
 
 interface GetNetworkStatsRequest {
   type: 'GET_NETWORK_STATS';
+  payload?: {
+    urlPattern?: string;
+  };
 }
 
 interface HighlightElementsRequest {
@@ -36,6 +56,8 @@ interface HighlightElementsRequest {
 
 type ContentMessage = 
   | AnalyzeDOMRequest 
+  | FindElementsRequest
+  | InspectElementRequest
   | GetPageInfoRequest 
   | GetNetworkStatsRequest 
   | GetRecentErrorsRequest 
@@ -82,6 +104,12 @@ async function handleMessage(message: ContentMessage): Promise<unknown> {
     case 'ANALYZE_DOM_REQUEST':
       return handleAnalyzeDOM(message.payload);
     
+    case 'FIND_ELEMENTS':
+      return handleFindElements(message.payload);
+
+    case 'INSPECT_ELEMENT':
+      return handleInspectElement(message.payload);
+
     case 'GET_PAGE_INFO':
       return handleGetPageInfo();
 
@@ -94,7 +122,7 @@ async function handleMessage(message: ContentMessage): Promise<unknown> {
     case 'GET_NETWORK_STATS':
       return { 
         success: true, 
-        stats: networkMonitor?.getStats(),
+        stats: networkMonitor?.getStats(message.payload?.urlPattern),
         failedRequests: networkMonitor?.getFailedRequests()
       };
     
@@ -106,7 +134,7 @@ async function handleMessage(message: ContentMessage): Promise<unknown> {
 /**
  * 分析页面 DOM
  */
-function handleAnalyzeDOM(payload: { keywords: string[] }): {
+function handleAnalyzeDOM(payload: { keywords: string[]; weights?: Record<string, number>; topN?: number }): {
   success: boolean;
   elements: PrunedElement[];
   markdown: string;
@@ -119,7 +147,8 @@ function handleAnalyzeDOM(payload: { keywords: string[] }): {
   try {
     const pruner = new DOMPruner({
       keywords: payload.keywords,
-      maxElements: 100,
+      weights: payload.weights,
+      maxElements: payload.topN || 100,
     });
 
     // 执行 DOM 剪枝
@@ -152,6 +181,63 @@ function handleAnalyzeDOM(payload: { keywords: string[] }): {
       markdown: '',
       stats: { totalElements: 0, prunedCount: 0, interactiveCount: 0 },
     };
+  }
+}
+
+/**
+ * 寻找元素（DTPP 核心逻辑）
+ */
+function handleFindElements(payload: { keywords: string[]; weights?: Record<string, number>; topN?: number }) {
+  const result = handleAnalyzeDOM(payload);
+  if (result.success) {
+    return {
+      success: true,
+      candidates: result.elements.map(el => ({
+        selector: el.selector,
+        tag: el.tag,
+        text: el.text,
+        score: el.score,
+        attributes: el.attributes
+      }))
+    };
+  }
+  return result;
+}
+
+/**
+ * 检查特定元素
+ */
+function handleInspectElement(payload: { selector: string }) {
+  try {
+    const el = document.querySelector(payload.selector);
+    if (!el) return { success: false, error: 'Element not found' };
+
+    const styles = getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+
+    return {
+      success: true,
+      html: el.outerHTML.slice(0, 2000),
+      computedStyles: {
+        display: styles.display,
+        visibility: styles.visibility,
+        position: styles.position,
+        zIndex: styles.zIndex,
+        width: styles.width,
+        height: styles.height,
+        color: styles.color,
+        backgroundColor: styles.backgroundColor
+      },
+      boundingRect: {
+        top: rect.top,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height
+      },
+      isVisible: rect.width > 0 && rect.height > 0 && styles.display !== 'none' && styles.visibility !== 'hidden'
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
   }
 }
 

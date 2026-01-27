@@ -18,7 +18,7 @@ const PRUNE_TAGS = [
 const INTERACTIVE_TAGS = [
   'a', 'button', 'input', 'select', 'textarea', 'form',
   'label', 'option', 'optgroup', 'details', 'summary',
-  'dialog', 'menu', 'menuitem',
+  'dialog', 'menu', 'menuitem', 'area', 'contenteditable',
 ];
 
 /**
@@ -30,6 +30,7 @@ const SEMANTIC_TAGS = [
   'p', 'ul', 'ol', 'li', 'dl', 'dt', 'dd',
   'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
   'figure', 'figcaption', 'blockquote', 'pre', 'code',
+  'time', 'mark', 'summary',
 ];
 
 export interface PrunedElement {
@@ -47,6 +48,7 @@ export interface PruneOptions {
   maxDepth?: number;
   maxElements?: number;
   keywords?: string[];
+  weights?: Record<string, number>;
   includeHidden?: boolean;
 }
 
@@ -61,6 +63,7 @@ export class DOMPruner {
       maxDepth: options.maxDepth ?? 10,
       maxElements: options.maxElements ?? 100,
       keywords: options.keywords ?? [],
+      weights: options.weights ?? {},
       includeHidden: options.includeHidden ?? false,
     };
   }
@@ -80,18 +83,20 @@ export class DOMPruner {
       const allElements = doc.querySelectorAll('*');
       allElements.forEach(el => {
         const style = getComputedStyle(el);
-        if (style.display === 'none' || style.visibility === 'hidden') {
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
           el.remove();
         }
       });
     }
 
-    // 移除空元素
+    // 移除空元素（除非是交互性的或包含特定属性）
     const allElements = doc.querySelectorAll('*');
     allElements.forEach(el => {
-      if (!el.textContent?.trim() && 
-          !INTERACTIVE_TAGS.includes(el.tagName.toLowerCase()) &&
-          el.children.length === 0) {
+      const hasText = !!el.textContent?.trim();
+      const isInteractive = INTERACTIVE_TAGS.includes(el.tagName.toLowerCase());
+      const hasImportantAttr = el.hasAttribute('id') || el.hasAttribute('name') || el.hasAttribute('role');
+      
+      if (!hasText && !isInteractive && !hasImportantAttr && el.children.length === 0) {
         el.remove();
       }
     });
@@ -99,12 +104,10 @@ export class DOMPruner {
 
   /**
    * 阶段2：评分函数 - 根据关键词和交互性评分
-   */
-  /**
-   * 阶段2：评分函数 - 根据关键词和交互性评分
    * 实现 Prune4Web 三级权重策略
    */
-  buildScoringFunction(keywords: string[]): (el: Element) => number {
+  buildScoringFunction(): (el: Element) => number {
+    const { keywords, weights } = this.options;
     const keywordSet = new Set(keywords.map(k => k.toLowerCase()));
     
     return (el: Element): number => {
@@ -114,53 +117,45 @@ export class DOMPruner {
       
       // 基础分：交互元素
       if (INTERACTIVE_TAGS.includes(tagName)) {
-        score += 5;
+        score += 10;
       }
 
       // 基础分：语义元素
       if (SEMANTIC_TAGS.includes(tagName)) {
-        score += 3;
+        score += 5;
       }
 
-      // Tier 1 (1.0): 可见文本内容匹配
-      // 这里的 1.0 映射为 30 分
+      // 处理关键词评分
       for (const keyword of keywordSet) {
+        const weight = weights[keyword] ?? 1.0;
+        
+        // Tier 1 (1.0): 可见文本内容匹配
         if (text.includes(keyword)) {
-          // 如果是直接文本节点更佳，这里简化为包含
-          score += 30;
+          score += 30 * weight;
         }
-      }
 
-      // Tier 2 (0.7): 元数据匹配 (aria-label, title, alt, placeholder)
-      // 映射为 21 分
-      const metadataAttrs = ['aria-label', 'title', 'alt', 'placeholder', 'role'];
-      for (const output of metadataAttrs) {
-        const val = el.getAttribute(output)?.toLowerCase();
-        if (val) {
-          for (const keyword of keywordSet) {
-            if (val.includes(keyword)) {
-              score += 21;
-            }
+        // Tier 2 (0.7): 元数据匹配 (aria-label, title, alt, placeholder)
+        const metadataAttrs = ['aria-label', 'title', 'alt', 'placeholder', 'role'];
+        for (const attr of metadataAttrs) {
+          const val = el.getAttribute(attr)?.toLowerCase();
+          if (val && val.includes(keyword)) {
+            score += 21 * weight;
           }
         }
-      }
 
-      // Tier 3 (0.3): 结构/属性匹配 (id, class, name)
-      // 映射为 9 分
-      const structAttrs = ['id', 'class', 'name', 'data-testid'];
-      for (const attr of structAttrs) {
-        const val = el.getAttribute(attr)?.toLowerCase();
-        if (val) {
-          for (const keyword of keywordSet) {
-            if (val.includes(keyword)) {
-              score += 9;
-            }
+        // Tier 3 (0.3): 结构/属性匹配 (id, class, name)
+        const structAttrs = ['id', 'class', 'name', 'data-testid'];
+        for (const attr of structAttrs) {
+          const val = el.getAttribute(attr)?.toLowerCase();
+          if (val && val.includes(keyword)) {
+            score += 9 * weight;
           }
         }
       }
 
       // 额外的结构加分
-      if (el.id) score += 5; // ID 选择器非常有用
+      if (el.id) score += 10;
+      if (el.getAttribute('role')) score += 5;
 
       return score;
     };
@@ -170,7 +165,7 @@ export class DOMPruner {
    * 阶段3：提取前 N 个最相关节点
    */
   extractTopCandidates(doc: Document, n: number = 50): PrunedElement[] {
-    const scoringFn = this.buildScoringFunction(this.options.keywords);
+    const scoringFn = this.buildScoringFunction();
     const candidates: { element: Element; score: number }[] = [];
 
     // 遍历所有元素并评分

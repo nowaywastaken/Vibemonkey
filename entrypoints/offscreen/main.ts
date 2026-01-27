@@ -101,6 +101,42 @@ function executeSafe(payload: { code: string; context?: any }) {
         });
         vm.setProp(documentHandle, "querySelectorAll", querySelectorAllHandle);
         querySelectorAllHandle.dispose();
+
+        // Mock addEventListener
+        const addEventListenerHandle = vm.newFunction("addEventListener", (typeHandle, listenerHandle) => {
+            const type = vm.getString(typeHandle);
+            sideEffects.push({ type: 'addEventListener', event: type });
+        });
+        vm.setProp(vm.global, "addEventListener", addEventListenerHandle);
+        vm.setProp(documentHandle, "addEventListener", addEventListenerHandle);
+        addEventListenerHandle.dispose();
+
+        // Mock GM_addStyle
+        const gmAddStyleHandle = vm.newFunction("GM_addStyle", (cssHandle) => {
+            const css = vm.getString(cssHandle);
+            sideEffects.push({ type: 'addStyle', css: css.slice(0, 100) });
+        });
+        vm.setProp(vm.global, "GM_addStyle", gmAddStyleHandle);
+        gmAddStyleHandle.dispose();
+
+        // Mock localStorage
+        const storageHandle = vm.newObject();
+        const setItemHandle = vm.newFunction("setItem", (keyHandle, valueHandle) => {
+             sideEffects.push({ type: 'storage_set', key: vm.getString(keyHandle) });
+        });
+        vm.setProp(storageHandle, "setItem", setItemHandle);
+        setItemHandle.dispose();
+        vm.setProp(vm.global, "localStorage", storageHandle);
+        storageHandle.dispose();
+
+        // Mock fetch
+        const fetchHandle = vm.newFunction("fetch", (urlHandle) => {
+            const url = vm.getString(urlHandle);
+            sideEffects.push({ type: 'fetch', url });
+            return vm.newPromise().handle; // Simplified promise
+        });
+        vm.setProp(vm.global, "fetch", fetchHandle);
+        fetchHandle.dispose();
         
         vm.setProp(vm.global, "document", documentHandle);
         documentHandle.dispose();

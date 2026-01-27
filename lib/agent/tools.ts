@@ -335,12 +335,109 @@ export const testScriptTool: Tool = {
 };
 
 /**
+ * 寻找元素工具（DTPP 阶段 2+3）
+ */
+export const findElementsTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'find_elements',
+    description: '根据关键词和权重在页面中寻找最相关的元素。这是 DTPP 策略的核心。',
+    parameters: {
+      type: 'object',
+      properties: {
+        keywords: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '关键词列表',
+        },
+        weights: {
+          type: 'object',
+          description: '关键词权重映射，如 {"login": 1.5, "submit": 1.0}',
+        },
+        topN: {
+          type: 'number',
+          description: '返回的前 N 个结果，默认 20',
+        },
+      },
+      required: ['keywords'],
+    },
+  },
+};
+
+/**
+ * 检查特定元素工具
+ */
+export const inspectElementTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'inspect_element',
+    description: '获取特定元素的详细信息，包括 HTML、计算样式、位置和可见性',
+    parameters: {
+      type: 'object',
+      properties: {
+        selector: {
+          type: 'string',
+          description: 'CSS 选择器',
+        },
+      },
+      required: ['selector'],
+    },
+  },
+};
+
+/**
+ * 搜索社区脚本工具
+ */
+export const searchCommunityScriptsTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'search_community_scripts',
+    description: '在 GreasyFork 等社区搜索现有的脚本',
+    parameters: {
+      type: 'object',
+      properties: {
+        keyword: {
+          type: 'string',
+          description: '搜索关键词或域名',
+        },
+      },
+      required: ['keyword'],
+    },
+  },
+};
+
+/**
+ * 获取社区脚本详情工具
+ */
+export const getCommunityScriptDetailTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'get_community_script_detail',
+    description: '获取社区脚本的完整代码',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: '脚本详情页 URL 或代码 URL',
+        },
+      },
+      required: ['url'],
+    },
+  },
+};
+
+/**
  * 获取所有可用工具
  */
 export function getAllTools(): Tool[] {
   return [
     analyzeDomTool,
+    findElementsTool,
+    inspectElementTool,
     searchScriptsTool,
+    searchCommunityScriptsTool,
+    getCommunityScriptDetailTool,
     generateScriptTool,
     validateScriptTool,
     saveMemoryTool,
@@ -360,7 +457,11 @@ export function getAllTools(): Tool[] {
  */
 export const toolsMap: Record<string, Tool> = {
   analyze_dom: analyzeDomTool,
+  find_elements: findElementsTool,
+  inspect_element: inspectElementTool,
   search_scripts: searchScriptsTool,
+  search_community_scripts: searchCommunityScriptsTool,
+  get_community_script_detail: getCommunityScriptDetailTool,
   generate_script: generateScriptTool,
   validate_script: validateScriptTool,
   save_memory: saveMemoryTool,

@@ -1094,9 +1094,37 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         
         const domResult = await handleAnalyzeDOM({ 
           tabId: tab.id, 
-          keywords: (args.selectors as string)?.split(',') || [] 
+          keywords: (args.keywords as string[]) || (args.selectors as string)?.split(',') || [] ,
+          weights: args.weights as Record<string, number>,
+          topN: args.topN as number
         });
         return JSON.stringify(domResult);
+      }
+
+      case 'find_elements': {
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) return JSON.stringify({ error: 'No active tab' });
+        
+        const result = await browser.tabs.sendMessage(tab.id, {
+          type: 'FIND_ELEMENTS',
+          payload: {
+            keywords: args.keywords as string[],
+            weights: args.weights as Record<string, number>,
+            topN: args.topN as number
+          }
+        });
+        return JSON.stringify(result);
+      }
+
+      case 'inspect_element': {
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) return JSON.stringify({ error: 'No active tab' });
+        
+        const result = await browser.tabs.sendMessage(tab.id, {
+          type: 'INSPECT_ELEMENT',
+          payload: { selector: args.selector as string }
+        });
+        return JSON.stringify(result);
       }
 
       case 'test_script': {
@@ -1116,18 +1144,37 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         return JSON.stringify(sandboxRes);
       }
 
-      case 'search_scripts': {
-         if (scriptRepository && typeof args.domain === 'string') {
-           const results = await scriptRepository.searchAllByDomain(args.domain);
+      case 'search_scripts':
+      case 'search_community_scripts': {
+         if (scriptRepository) {
+           const query = (args.keyword || args.domain) as string;
+           const results = await scriptRepository.searchAll(query);
            return JSON.stringify(results);
          }
-         return JSON.stringify({ error: 'Repository not initialized or invalid domain' });
+         return JSON.stringify({ error: 'Repository not initialized' });
       }
 
-      case 'save_memory': {
-         if (mem0Client && typeof args.content === 'string' && typeof args.type === 'string') {
-            await mem0Client.add(args.content, args.type as any, { domain: args.domain as string });
-            return JSON.stringify({ success: true });
+      case 'get_community_script_detail': {
+        if (scriptRepository) {
+          const code = await scriptRepository.fetchScriptCode(args.url as string);
+          return JSON.stringify({ code });
+        }
+        return JSON.stringify({ error: 'Repository not initialized' });
+      }
+
+      case 'save_memory':
+      case 'add_memory': {
+         if (mem0Client) {
+            const res = await mem0Client.add(
+              args.content as string, 
+              args.type as any, 
+              { 
+                domain: args.domain as string,
+                scriptId: args.scriptId as string,
+                ...(args.metadata as object || {})
+              }
+            );
+            return JSON.stringify({ success: true, memoryId: res.id });
          }
          return JSON.stringify({ error: 'Mem0 not initialized' });
       }
