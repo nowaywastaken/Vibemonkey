@@ -12,7 +12,6 @@ import { createSelfHealingSystem, SelfHealingSystem, RuntimeError } from '@/lib/
 import { createHistoryManager, HistoryManager, ScriptHistoryItem, HistoryFilter } from '@/lib/script/history';
 import { createCodeAuditor, CodeAuditor, AuditResult, formatAuditResult } from '@/lib/script/auditor';
 import { initializeCompiler, compileTypeScript, compileUserScript, validateTypeScript, CompileResult } from '@/lib/compiler/typescript-compiler';
-import { createScriptManager, ScriptManager } from '@/lib/script/manager';
 import { createScriptVersionManager, ScriptVersionManager, extractMainDomain } from '@/lib/script/script-version-manager';
 import { createAgentContextBuilder, AgentContextBuilder, AgentContext } from '@/lib/agent/agent-context';
 import { startKeepAlive, stopKeepAlive, setupKeepAliveListener, triggerHeartbeat } from '@/lib/keepalive';
@@ -24,7 +23,6 @@ let scriptRepository: ScriptRepository | null = null;
 let healingSystem: SelfHealingSystem | null = null;
 let historyManager: HistoryManager | null = null;
 let codeAuditor: CodeAuditor | null = null;
-let scriptManager: ScriptManager | null = null;
 let scriptVersionManager: ScriptVersionManager | null = null;
 let agentContextBuilder: AgentContextBuilder | null = null;
 
@@ -290,7 +288,6 @@ async function initializeClients(): Promise<void> {
     healingSystem = createSelfHealingSystem();
     historyManager = createHistoryManager();
     codeAuditor = createCodeAuditor();
-    scriptManager = createScriptManager();
     scriptVersionManager = createScriptVersionManager();
     agentContextBuilder = createAgentContextBuilder(scriptVersionManager);
 
@@ -935,13 +932,17 @@ async function handleValidateTypeScript(code: string): Promise<{
  * 获取即匹配的脚本
  */
 async function handleGetMatchingScripts(url: string): Promise<{ success: boolean; scripts: any[] }> {
-  if (!scriptManager) {
+  if (!scriptVersionManager) {
     return { success: false, scripts: [] };
   }
   
   try {
-    const scripts = await scriptManager.getScriptsForUrl(url);
-    return { success: true, scripts };
+    const scripts = await scriptVersionManager.getScriptsForUrl(url);
+    const scriptsWithCode = scripts.map(s => ({
+      ...s,
+      compiledCode: s.versions[0]?.compiledCode || s.versions[0]?.code
+    }));
+    return { success: true, scripts: scriptsWithCode };
   } catch (error) {
     console.error('[VibeMonkey] Get matching scripts error:', error);
     return { success: false, scripts: [] };
