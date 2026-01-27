@@ -19,6 +19,7 @@
     "wxt": "^0.20.6"
   },
   "dependencies": {
-    "@swc/wasm-web": "^1.15.10"
+    "@swc/wasm-web": "^1.15.10",
+    "quickjs-emscripten": "^0.31.0"
   }
 }

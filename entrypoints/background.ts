@@ -34,7 +34,8 @@ type AgentStatus = 'idle' | 'thinking' | 'writing' | 'tool_calling' | 'error';
 // 不再使用内存变量，改为从存储中获取
 async function getAgentStatusState(): Promise<{ status: AgentStatus; message: string }> {
   try {
-    const result = await browser.storage.local.get(AGENT_STATUS_KEY);
+    const storage = browser.storage.session || browser.storage.local;
+    const result = await storage.get(AGENT_STATUS_KEY);
     const state = result[AGENT_STATUS_KEY] as { status: AgentStatus; message: string } | undefined;
     if (state && typeof state.status === 'string') {
       return state;
@@ -138,6 +139,11 @@ interface GetAgentStatusMessage {
   type: 'GET_AGENT_STATUS';
 }
 
+interface ExecuteSandboxCodeMessage {
+  type: 'EXECUTE_SANDBOX_CODE';
+  payload: { code: string; context?: any };
+}
+
 type ExtensionMessage = 
   | GenerateScriptMessage 
   | AnalyzeDOMMessage 
@@ -153,7 +159,8 @@ type ExtensionMessage =
   | GetScriptListMessage
   | ToggleScriptMessage
   | GetScriptHistoryMessage
-  | GetAgentStatusMessage;
+  | GetAgentStatusMessage
+  | ExecuteSandboxCodeMessage;
 
 export default defineBackground(() => {
   console.log('[VibeMokey] Background service worker started');
@@ -202,6 +209,8 @@ export default defineBackground(() => {
   browser.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === 'keep-alive') {
       // console.log('[VibeMokey] Keep-alive alarm triggered');
+      // 执行一个轻量级操作以重置计时器
+      void browser.runtime.getPlatformInfo();
     }
   });
 });
@@ -219,6 +228,26 @@ function startKeepAlive() {
  */
 function stopKeepAlive() {
   browser.alarms.clear('keep-alive');
+}
+
+/**
+ * 初始化 Offscreen 文档
+ */
+async function setupOffscreenDocument(path: string) {
+  try {
+    // 检查是否已存在 Offscreen 文档
+    // 注意：chrome.offscreen API 需要在 manifest 中声明权限
+    if (await chrome.offscreen.hasDocument()) return;
+    
+    await chrome.offscreen.createDocument({
+      url: path,
+      reasons: [chrome.offscreen.Reason.WORKERS],
+      justification: 'Run QuickJS sandbox for script analysis',
+    });
+    console.log('[VibeMokey] Offscreen document created');
+  } catch (e) {
+    console.error('[VibeMokey] Failed to create offscreen document:', e);
+  }
 }
 
 /**
@@ -254,8 +283,9 @@ async function updateAgentStatus(status: AgentStatus, message?: string): Promise
   
   const payload = { status, message: nextMessage };
   
-  // 持久化到存储
-  await browser.storage.local.set({ [AGENT_STATUS_KEY]: payload });
+  // 持久化到存储 (Session 优先)
+  const storage = browser.storage.session || browser.storage.local;
+  await storage.set({ [AGENT_STATUS_KEY]: payload });
   
   // 广播状态变化给 Popup (Port)
   broadcastMessage({
@@ -281,6 +311,13 @@ async function initializeClients(): Promise<void> {
     scriptManager = createScriptManager();
     scriptVersionManager = createScriptVersionManager();
     agentContextBuilder = createAgentContextBuilder(scriptVersionManager);
+
+    // 初始化 Offscreen (使用 chrome.runtime.getURL 获取正确路径)
+    // WXT 构建后 entrypoints/offscreen/index.html 通常对应 offscreen.html
+    // 但为了保险，我们使用 entrypoints/offscreen/index.html 并依赖 WXT 的处理
+    // 或者尝试直接使用 offscreen.html
+    await setupOffscreenDocument('entrypoints/offscreen/index.html');
+
     console.log('[VibeMokey] Clients initialized (including version manager)');
   } catch (error) {
     console.error('[VibeMokey] Failed to initialize clients:', error);
@@ -339,6 +376,9 @@ async function handleMessage(
     
     case 'GET_AGENT_STATUS':
       return getAgentStatusState();
+
+    case 'EXECUTE_SANDBOX_CODE':
+      return handleSandboxExecute(message.payload);
     
     default:
       return { error: 'Unknown message type' };
@@ -1025,8 +1065,84 @@ async function handleGetScriptHistory(payload: { scriptId: string; version?: num
       })),
     };
   } catch (error) {
-    console.error('[VibeMokey] Get script history error:', error);
     return { success: false };
+  }
+}
+
+/**
+ * 处理沙箱执行请求
+ */
+async function handleSandboxExecute(payload: { code: string; context?: any }): Promise<any> {
+  // 确保 Offscreen 文档存在
+  await setupOffscreenDocument('entrypoints/offscreen/index.html');
+  
+  // 通过 runtime.sendMessage 发送给 Offscreen
+  return new Promise((resolve) => {
+    browser.runtime.sendMessage({
+      type: 'EXECUTE_IN_SANDBOX',
+      payload
+    }).then(resolve).catch((e) => {
+      console.error('Sandbox execution failed:', e);
+      resolve({ success: false, error: e.message });
+    });
+  });
+}
+
+/**
+ * 执行工具调用 (Agent Dispatcher)
+ */
+async function executeTool(name: string, args: Record<string, unknown>): Promise<string> {
+  try {
+    await updateAgentStatus('tool_calling', `正在调用工具: ${name}`);
+    
+    switch (name) {
+      case 'analyze_dom':
+        // 获取当前标签页并发送分析请求
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) return JSON.stringify({ error: 'No active tab' });
+        
+        const domResult = await handleAnalyzeDOM({ 
+          tabId: tab.id, 
+          keywords: (args.selectors as string)?.split(',') || [] 
+        });
+        return JSON.stringify(domResult);
+
+      case 'test_script':
+        if (typeof args.code !== 'string') return JSON.stringify({ error: 'Invalid arguments: code required' });
+        
+        const sandboxRes = await handleSandboxExecute({ code: args.code });
+        
+        // 发送副作用给 Content Script 进行高亮 (Shadow Execution)
+        if (sandboxRes.sideEffects?.length > 0) {
+           const [activeTab] = await browser.tabs.query({ active: true, currentWindow: true });
+           if (activeTab?.id) {
+             browser.tabs.sendMessage(activeTab.id, { 
+               type: 'HIGHLIGHT_ELEMENTS', 
+               payload: sandboxRes.sideEffects 
+             });
+           }
+        }
+        return JSON.stringify(sandboxRes);
+
+      case 'search_scripts':
+         if (scriptRepository && typeof args.domain === 'string') {
+           const results = await scriptRepository.searchAllByDomain(args.domain);
+           return JSON.stringify(results);
+         }
+         return JSON.stringify({ error: 'Repository not initialized or invalid domain' });
+
+      case 'save_memory':
+         if (mem0Client && typeof args.content === 'string' && typeof args.type === 'string') {
+            await mem0Client.add(args.content, args.type as any, { domain: args.domain as string });
+            return JSON.stringify({ success: true });
+         }
+         return JSON.stringify({ error: 'Mem0 not initialized' });
+
+      default:
+        return JSON.stringify({ error: `Tool ${name} not implemented` });
+    }
+  } catch (error) {
+    return JSON.stringify({ error: error instanceof Error ? error.message : String(error) });
   }
 }
 

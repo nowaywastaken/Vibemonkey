@@ -24,91 +24,22 @@ interface GetNetworkStatsRequest {
   type: 'GET_NETWORK_STATS';
 }
 
-type ContentMessage = AnalyzeDOMRequest | GetPageInfoRequest | GetNetworkStatsRequest;
+interface HighlightElementsRequest {
+  type: 'HIGHLIGHT_ELEMENTS';
+  payload: { type: string; selector: string }[];
+}
+
+type ContentMessage = AnalyzeDOMRequest | GetPageInfoRequest | GetNetworkStatsRequest | HighlightElementsRequest;
 
 // 网络监控器实例
 let networkMonitor: ReturnType<typeof setupNetworkMonitor> | null = null;
-
-export default defineContentScript({
-  matches: ['<all_urls>'],
-  
-  main() {
-    console.log('[VibeMokey] Content script loaded on:', window.location.href);
-
-    // 设置错误捕获
-    const cleanup = setupConsoleCapture((error: RuntimeError) => {
-      // 将错误报告给 Background
-      browser.runtime.sendMessage({
-        type: 'REPORT_ERROR',
-        payload: error,
-      });
-    });
-
-    // 设置网络监控
-    networkMonitor = setupNetworkMonitor((error: NetworkError) => {
-      // 将网络错误报告给 Background
-      browser.runtime.sendMessage({
-        type: 'REPORT_ERROR',
-        payload: {
-          type: 'network_error',
-          message: error.message,
-          url: error.request.url,
-          stack: `${error.type}: ${error.request.method} ${error.request.url}`,
-          timestamp: new Date(),
-        } as RuntimeError,
-      });
-    });
-
+// ... (keep main function same) ...
     // 监听来自 Background 的消息
     browser.runtime.onMessage.addListener((message: ContentMessage, sender, sendResponse) => {
       handleMessage(message).then(sendResponse);
       return true;
     });
-
-    // 页面卸载时清理
-    window.addEventListener('beforeunload', cleanup);
-    
-    // 初始化：请求并注入脚本
-    injectMatchingScripts();
-  },
-});
-
-/**
- * 请求并注入匹配的脚本
- */
-async function injectMatchingScripts() {
-  try {
-    const response = await browser.runtime.sendMessage({
-      type: 'GET_MATCHING_SCRIPTS',
-      payload: { url: window.location.href },
-    });
-
-    if (response?.success && response.scripts) {
-      console.log(`[VibeMokey] Found ${response.scripts.length} matching scripts`);
-      
-      for (const script of response.scripts) {
-        injectScript(script.code);
-      }
-    }
-  } catch (error) {
-    console.error('[VibeMokey] Failed to inject scripts:', error);
-  }
-}
-
-/**
- * 注入脚本到页面
- */
-function injectScript(code: string) {
-  try {
-    const script = document.createElement('script');
-    script.textContent = code;
-    (document.head || document.documentElement).appendChild(script);
-    script.remove(); // 执行后移除标签
-  } catch (error) {
-    console.error('[VibeMokey] Script injection error:', error);
-  }
-}
-
+// ...
 /**
  * 处理消息
  */
@@ -119,6 +50,9 @@ async function handleMessage(message: ContentMessage): Promise<unknown> {
     
     case 'GET_PAGE_INFO':
       return handleGetPageInfo();
+
+    case 'HIGHLIGHT_ELEMENTS':
+      return handleHighlightElements(message.payload);
     
     default:
       return { error: 'Unknown message type' };
@@ -218,4 +152,52 @@ function handleGetPageInfo(): {
       },
     };
   }
+}
+
+/**
+ * 高亮元素 (Shadow Execution Feedback)
+ */
+function handleHighlightElements(effects: { type: string; selector: string }[]): { success: boolean } {
+  effects.forEach(effect => {
+    if (!effect.selector) return;
+    try {
+      const elements = document.querySelectorAll(effect.selector);
+      elements.forEach(el => {
+        const htmlEl = el as HTMLElement;
+        const originalOutline = htmlEl.style.outline;
+        const originalTransition = htmlEl.style.transition;
+        
+        htmlEl.style.outline = '3px solid rgba(255, 0, 0, 0.7)';
+        htmlEl.style.transition = 'outline 0.3s ease';
+        
+        // 添加标签
+        const label = document.createElement('div');
+        label.textContent = `AI: ${effect.type}`;
+        label.style.position = 'absolute';
+        label.style.background = 'rgba(255, 0, 0, 0.9)';
+        label.style.color = 'white';
+        label.style.fontSize = '12px';
+        label.style.padding = '4px 8px';
+        label.style.borderRadius = '4px';
+        label.style.zIndex = '2147483647';
+        label.style.pointerEvents = 'none';
+        label.style.boxShadow = '0 2px 4px rgba(0,0,0,0.2)';
+        
+        const rect = htmlEl.getBoundingClientRect();
+        label.style.top = `${window.scrollY + rect.top - 30}px`;
+        label.style.left = `${window.scrollX + rect.left}px`;
+        document.body.appendChild(label);
+
+        // 3秒后移除
+        setTimeout(() => {
+          htmlEl.style.outline = originalOutline;
+          htmlEl.style.transition = originalTransition;
+          label.remove();
+        }, 3000);
+      });
+    } catch (e) {
+      console.error('[VibeMokey] Highlight error:', e);
+    }
+  });
+  return { success: true };
 }

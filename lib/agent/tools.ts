@@ -310,6 +310,31 @@ export const toggleScriptTool: Tool = {
 };
 
 /**
+ * 测试脚本工具 (Shadow Execution)
+ */
+export const testScriptTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'test_script',
+    description: '在沙箱中安全地测试脚本，捕获其副作用并在页面上通过高亮展示（影子执行）。用于验证脚本是否选中了正确的元素。',
+    parameters: {
+      type: 'object',
+      properties: {
+        code: {
+          type: 'string',
+          description: '要测试的 JavaScript 代码',
+        },
+        timeout: {
+          type: 'number',
+          description: '超时时间（毫秒），默认 5000',
+        },
+      },
+      required: ['code'],
+    },
+  },
+};
+
+/**
  * 获取所有可用工具
  */
 export function getAllTools(): Tool[] {
@@ -326,6 +351,7 @@ export function getAllTools(): Tool[] {
     monitorConsoleErrorsTool,
     fetchNetworkLogsTool,
     toggleScriptTool,
+    testScriptTool,
   ];
 }
 
@@ -345,5 +371,6 @@ export const toolsMap: Record<string, Tool> = {
   monitor_console_errors: monitorConsoleErrorsTool,
   fetch_network_logs: fetchNetworkLogsTool,
   toggle_script: toggleScriptTool,
+  test_script: testScriptTool,
 };
 

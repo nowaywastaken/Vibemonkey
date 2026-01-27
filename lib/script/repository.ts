@@ -3,6 +3,8 @@
  * 搜索 GreasyFork、Userscript.Zone 等仓库中的现有脚本
  */
 
+import { createUserscriptZoneClient, UserscriptZoneClient } from './userscript-zone';
+
 export interface ScriptInfo {
   id: string;
   name: string;
@@ -27,6 +29,8 @@ export interface SearchResult {
  * 脚本仓库客户端
  */
 export class ScriptRepository {
+  private userscriptZone = createUserscriptZoneClient();
+
   /**
    * 搜索 GreasyFork
    */
@@ -146,12 +150,34 @@ export class ScriptRepository {
   }
 
   /**
+   * 搜索 Userscript.Zone
+   */
+  async searchUserscriptZone(query: string): Promise<SearchResult> {
+     const result = await this.userscriptZone.search(query);
+     return {
+         source: 'userscript_zone',
+         scripts: result.scripts.map(s => ({
+             id: `uz_${s.id}`,
+             name: s.name,
+             description: s.description,
+             version: s.version,
+             author: s.author,
+             url: s.url,
+             installs: 0,
+             createdAt: new Date(s.createdAt),
+             updatedAt: new Date(s.updatedAt)
+         })),
+         total: result.total
+     };
+  }
+
+  /**
    * 搜索所有仓库
    */
   async searchAll(query: string): Promise<SearchResult[]> {
     const results = await Promise.all([
       this.searchGreasyFork(query),
-      // 可扩展其他仓库
+      this.searchUserscriptZone(query)
     ]);
 
     return results.filter(r => r.scripts.length > 0);
