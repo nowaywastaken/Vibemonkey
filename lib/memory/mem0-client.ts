@@ -235,12 +235,16 @@ export class Mem0Client {
   }
 
   private async searchCloud(query: string, filter?: MemoryFilter): Promise<Memory[]> {
-    const params = new URLSearchParams({ query, user_id: 'vibemonkey_user' });
-    
-    const response = await fetch(`${MEM0_API_URL}/memories/search/?${params}`, {
+    const response = await fetch(`${MEM0_API_URL}/memories/search/`, {
+      method: 'POST',
       headers: {
+        'Content-Type': 'application/json',
         'Authorization': `Token ${this.apiKey}`,
       },
+      body: JSON.stringify({
+        query,
+        user_id: 'vibemonkey_user',
+      }),
     });
 
     if (!response.ok) {

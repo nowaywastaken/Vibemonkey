@@ -67,8 +67,47 @@ export default defineContentScript({
 
     // 页面卸载时清理
     window.addEventListener('beforeunload', cleanup);
+    
+    // 初始化：请求并注入脚本
+    injectMatchingScripts();
   },
 });
+
+/**
+ * 请求并注入匹配的脚本
+ */
+async function injectMatchingScripts() {
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: 'GET_MATCHING_SCRIPTS',
+      payload: { url: window.location.href },
+    });
+
+    if (response?.success && response.scripts) {
+      console.log(`[VibeMokey] Found ${response.scripts.length} matching scripts`);
+      
+      for (const script of response.scripts) {
+        injectScript(script.code);
+      }
+    }
+  } catch (error) {
+    console.error('[VibeMokey] Failed to inject scripts:', error);
+  }
+}
+
+/**
+ * 注入脚本到页面
+ */
+function injectScript(code: string) {
+  try {
+    const script = document.createElement('script');
+    script.textContent = code;
+    (document.head || document.documentElement).appendChild(script);
+    script.remove(); // 执行后移除标签
+  } catch (error) {
+    console.error('[VibeMokey] Script injection error:', error);
+  }
+}
 
 /**
  * 处理消息

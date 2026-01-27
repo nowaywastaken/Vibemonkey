@@ -12,6 +12,7 @@ import { createSelfHealingSystem, SelfHealingSystem, RuntimeError } from '@/lib/
 import { createHistoryManager, HistoryManager, ScriptHistoryItem, HistoryFilter } from '@/lib/script/history';
 import { createCodeAuditor, CodeAuditor, AuditResult, formatAuditResult } from '@/lib/script/auditor';
 import { initializeCompiler, compileTypeScript, validateTypeScript, CompileResult } from '@/lib/compiler/typescript-compiler';
+import { createScriptManager, ScriptManager } from '@/lib/script/manager';
 
 // 全局状态
 let deepseekClient: DeepSeekClient | null = null;
@@ -20,6 +21,7 @@ let scriptRepository: ScriptRepository | null = null;
 let healingSystem: SelfHealingSystem | null = null;
 let historyManager: HistoryManager | null = null;
 let codeAuditor: CodeAuditor | null = null;
+let scriptManager: ScriptManager | null = null;
 
 // 消息类型定义
 interface GenerateScriptMessage {
@@ -50,6 +52,10 @@ interface ReportErrorMessage {
 
 interface GetStatusMessage {
   type: 'GET_STATUS';
+  payload: {
+    apiConfigured: boolean;
+    mem0Configured: boolean;
+  };
 }
 
 interface SaveApiKeyMessage {
@@ -85,6 +91,11 @@ interface ValidateTypeScriptMessage {
   payload: { code: string };
 }
 
+interface GetMatchingScriptsMessage {
+  type: 'GET_MATCHING_SCRIPTS';
+  payload: { url: string };
+}
+
 type ExtensionMessage = 
   | GenerateScriptMessage 
   | AnalyzeDOMMessage 
@@ -95,7 +106,8 @@ type ExtensionMessage =
   | DeleteHistoryMessage
   | AuditScriptMessage
   | CompileTypeScriptMessage
-  | ValidateTypeScriptMessage;
+  | ValidateTypeScriptMessage
+  | GetMatchingScriptsMessage;
 
 export default defineBackground(() => {
   console.log('[VibeMokey] Background service worker started');
@@ -121,6 +133,7 @@ async function initializeClients(): Promise<void> {
     healingSystem = createSelfHealingSystem();
     historyManager = createHistoryManager();
     codeAuditor = createCodeAuditor();
+    scriptManager = createScriptManager();
     console.log('[VibeMokey] Clients initialized');
   } catch (error) {
     console.error('[VibeMokey] Failed to initialize clients:', error);
@@ -164,6 +177,9 @@ async function handleMessage(
     
     case 'VALIDATE_TYPESCRIPT':
       return handleValidateTypeScript(message.payload.code);
+
+    case 'GET_MATCHING_SCRIPTS':
+      return handleGetMatchingScripts(message.payload.url);
     
     default:
       return { error: 'Unknown message type' };
@@ -256,6 +272,17 @@ async function handleGenerateScript(payload: GenerateScriptMessage['payload']): 
         script: generated.fullScript,
         userRequest,
       });
+    }
+
+    // 10. 保存到 ScriptManager (激活脚本)
+    if (scriptManager) {
+      await scriptManager.addScript({
+        name: metadata.name,
+        description: metadata.description,
+        code: generated.fullScript,
+        matches: metadata.match,
+      });
+      console.log('[VibeMokey] Script activated and saved');
     }
 
     return {
@@ -507,5 +534,22 @@ async function handleValidateTypeScript(code: string): Promise<{
       valid: false,
       errors: [error instanceof Error ? error.message : 'Unknown error'],
     };
+  }
+}
+
+/**
+ * 获取即匹配的脚本
+ */
+async function handleGetMatchingScripts(url: string): Promise<{ success: boolean; scripts: any[] }> {
+  if (!scriptManager) {
+    return { success: false, scripts: [] };
+  }
+  
+  try {
+    const scripts = await scriptManager.getScriptsForUrl(url);
+    return { success: true, scripts };
+  } catch (error) {
+    console.error('[VibeMokey] Get matching scripts error:', error);
+    return { success: false, scripts: [] };
   }
 }
