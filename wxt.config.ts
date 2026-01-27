@@ -10,6 +10,7 @@ export default defineConfig({
       'storage',
       'scripting',
       'tabs',
+      'alarms',
     ],
     host_permissions: ['<all_urls>'],
     content_security_policy: {

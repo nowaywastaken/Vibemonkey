@@ -27,10 +27,23 @@ let scriptManager: ScriptManager | null = null;
 let scriptVersionManager: ScriptVersionManager | null = null;
 let agentContextBuilder: AgentContextBuilder | null = null;
 
-// Agent 状态
+// Agent 状态存储键
+const AGENT_STATUS_KEY = 'vibemonkey_agent_status';
+
 type AgentStatus = 'idle' | 'thinking' | 'writing' | 'tool_calling' | 'error';
-let currentAgentStatus: AgentStatus = 'idle';
-let currentAgentMessage: string = '';
+// 不再使用内存变量，改为从存储中获取
+async function getAgentStatusState(): Promise<{ status: AgentStatus; message: string }> {
+  try {
+    const result = await browser.storage.local.get(AGENT_STATUS_KEY);
+    const state = result[AGENT_STATUS_KEY] as { status: AgentStatus; message: string } | undefined;
+    if (state && typeof state.status === 'string') {
+      return state;
+    }
+  } catch (e) {
+    console.error('Failed to get agent status from storage:', e);
+  }
+  return { status: 'idle', message: '' };
+}
 
 // 消息类型定义
 interface GenerateScriptMessage {
@@ -147,6 +160,9 @@ export default defineBackground(() => {
 
   // 初始化客户端
   initializeClients();
+  
+  // 启动保活
+  startKeepAlive();
 
   // 消息监听器
   browser.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendResponse) => {
@@ -160,10 +176,12 @@ export default defineBackground(() => {
       console.log('[VibeMokey] Stream port connected');
       activePorts.add(port);
       
-      // 发送当前状态
-      port.postMessage({
-        type: 'AGENT_STATUS_UPDATE',
-        payload: { status: currentAgentStatus, message: currentAgentMessage },
+      // 获取并发送当前状态
+      getAgentStatusState().then(state => {
+        port.postMessage({
+          type: 'AGENT_STATUS_UPDATE',
+          payload: { status: state.status, message: state.message },
+        });
       });
 
       port.onDisconnect.addListener(() => {
@@ -183,7 +201,7 @@ export default defineBackground(() => {
   // P2: MV3 持久化 - 心跳机制
   browser.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === 'keep-alive') {
-      console.log('[VibeMokey] Keep-alive alarm triggered');
+      // console.log('[VibeMokey] Keep-alive alarm triggered');
     }
   });
 });
@@ -192,7 +210,8 @@ export default defineBackground(() => {
  * 启动保活心跳
  */
 function startKeepAlive() {
-  browser.alarms.create('keep-alive', { periodInMinutes: 0.5 });
+  // 每 20 秒触发一次，防止 30s 暂停
+  browser.alarms.create('keep-alive', { periodInMinutes: 20 / 60 });
 }
 
 /**
@@ -226,13 +245,17 @@ function broadcastMessage(message: any) {
 /**
  * 更新 Agent 状态（支持流式广播）
  */
-function updateAgentStatus(status: AgentStatus, message?: string): void {
-  currentAgentStatus = status;
-  if (message !== undefined) {
-    currentAgentMessage = message;
-  }
+/**
+ * 更新 Agent 状态（支持持久化和流式广播）
+ */
+async function updateAgentStatus(status: AgentStatus, message?: string): Promise<void> {
+  const currentState = await getAgentStatusState();
+  const nextMessage = message !== undefined ? message : currentState.message;
   
-  const payload = { status, message: currentAgentMessage };
+  const payload = { status, message: nextMessage };
+  
+  // 持久化到存储
+  await browser.storage.local.set({ [AGENT_STATUS_KEY]: payload });
   
   // 广播状态变化给 Popup (Port)
   broadcastMessage({
@@ -315,7 +338,7 @@ async function handleMessage(
       return handleGetScriptHistory(message.payload);
     
     case 'GET_AGENT_STATUS':
-      return handleGetAgentStatus();
+      return getAgentStatusState();
     
     default:
       return { error: 'Unknown message type' };
@@ -948,7 +971,7 @@ async function handleToggleScript(payload: { scriptId: string; enabled: boolean 
   try {
     const script = await scriptVersionManager.toggleScript(payload.scriptId, payload.enabled);
     if (script) {
-      currentAgentMessage = `已${payload.enabled ? '启用' : '禁用'}脚本：${script.name}`;
+      await updateAgentStatus('idle', `已${payload.enabled ? '启用' : '禁用'}脚本：${script.name}`);
     }
     return { success: !!script, script };
   } catch (error) {
@@ -1007,18 +1030,6 @@ async function handleGetScriptHistory(payload: { scriptId: string; version?: num
   }
 }
 
-/**
- * 获取 Agent 状态
- */
-function handleGetAgentStatus(): {
-  status: AgentStatus;
-  message: string;
-} {
-  return {
-    status: currentAgentStatus,
-    message: currentAgentMessage,
-  };
-}
 
 
 

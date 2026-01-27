@@ -39,8 +39,19 @@ const elements = {
 
 // 初始化
 async function init(): Promise<void> {
-  await loadSettings();
+  // 1. 优先绑定事件
   bindEvents();
+  
+  // 2. 加载设置
+  try {
+    await loadSettings();
+  } catch (error) {
+    console.error('Initialization error:', error);
+    if (elements.saveStatus) {
+      elements.saveStatus.textContent = '✗ 加载设置失败';
+      elements.saveStatus.style.color = 'var(--error)';
+    }
+  }
 }
 
 // 加载设置

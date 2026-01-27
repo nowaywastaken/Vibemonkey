@@ -84,12 +84,20 @@ let streamPort: any = null; // Port 类型
 
 // 初始化
 async function init(): Promise<void> {
-  connectPort();
-  await updateCurrentTab();
-  await checkApiStatus();
-  await loadScriptList();
-  // 不再需要轮询，通过 Port 接收状态更新
+  // 1. 优先绑定事件，确保 UI 响应
   bindEvents();
+  
+  // 2. 异步初始化其他组件
+  try {
+    connectPort();
+    await updateCurrentTab();
+    await checkApiStatus();
+    // 恢复 Agent 状态
+    await recoverAgentStatus();
+    await loadScriptList();
+  } catch (error) {
+    console.error('Initialization error:', error);
+  }
 }
 
 // 建立长连接
@@ -242,6 +250,22 @@ async function checkApiStatus(): Promise<void> {
   }
 }
 
+// 恢复 Agent 状态
+async function recoverAgentStatus(): Promise<void> {
+  try {
+    const result = await browser.storage.local.get('vibemonkey_agent_status');
+    const state = result.vibemonkey_agent_status as { status: AgentStatus; message: string } | undefined;
+    if (state && state.status) {
+      updateStatus(state.status, getStatusLabel(state.status));
+      if (state.message) {
+        showAgentMessage(state.message);
+      }
+    }
+  } catch (error) {
+    console.error('Recover agent status error:', error);
+  }
+}
+
 // 加载脚本列表
 async function loadScriptList(): Promise<void> {
   if (!currentUrl) return;
@@ -340,23 +364,6 @@ function bindScriptToggleEvents(): void {
   });
 }
 
-// 轮询 Agent 状态
-async function pollAgentStatus(): Promise<void> {
-  try {
-    const response = await browser.runtime.sendMessage({ type: 'GET_AGENT_STATUS' });
-    if (response) {
-      updateStatus(response.status, getStatusLabel(response.status));
-      if (response.message) {
-        showAgentMessage(response.message);
-      }
-    }
-  } catch (error) {
-    // 忽略错误
-  }
-  
-  // 每 2 秒轮询一次
-  setTimeout(pollAgentStatus, 2000);
-}
 
 // 获取状态标签
 function getStatusLabel(status: AgentStatus): string {
