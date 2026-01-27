@@ -100,6 +100,10 @@ export class DOMPruner {
   /**
    * 阶段2：评分函数 - 根据关键词和交互性评分
    */
+  /**
+   * 阶段2：评分函数 - 根据关键词和交互性评分
+   * 实现 Prune4Web 三级权重策略
+   */
   buildScoringFunction(keywords: string[]): (el: Element) => number {
     const keywordSet = new Set(keywords.map(k => k.toLowerCase()));
     
@@ -107,33 +111,56 @@ export class DOMPruner {
       let score = 0;
       const tagName = el.tagName.toLowerCase();
       const text = el.textContent?.toLowerCase() || '';
-      const id = el.id?.toLowerCase() || '';
-      const className = el.className?.toString().toLowerCase() || '';
-
-      // 交互元素加分
+      
+      // 基础分：交互元素
       if (INTERACTIVE_TAGS.includes(tagName)) {
-        score += 10;
-      }
-
-      // 语义元素加分
-      if (SEMANTIC_TAGS.includes(tagName)) {
         score += 5;
       }
 
-      // 关键词匹配加分
-      for (const keyword of keywordSet) {
-        if (text.includes(keyword)) score += 15;
-        if (id.includes(keyword)) score += 20;
-        if (className.includes(keyword)) score += 20;
+      // 基础分：语义元素
+      if (SEMANTIC_TAGS.includes(tagName)) {
+        score += 3;
       }
 
-      // 有 ID 的元素加分（选择器稳定性）
-      if (el.id) score += 8;
+      // Tier 1 (1.0): 可见文本内容匹配
+      // 这里的 1.0 映射为 30 分
+      for (const keyword of keywordSet) {
+        if (text.includes(keyword)) {
+          // 如果是直接文本节点更佳，这里简化为包含
+          score += 30;
+        }
+      }
 
-      // 有特定属性的加分
-      if (el.hasAttribute('data-testid')) score += 10;
-      if (el.hasAttribute('aria-label')) score += 5;
-      if (el.hasAttribute('role')) score += 5;
+      // Tier 2 (0.7): 元数据匹配 (aria-label, title, alt, placeholder)
+      // 映射为 21 分
+      const metadataAttrs = ['aria-label', 'title', 'alt', 'placeholder', 'role'];
+      for (const output of metadataAttrs) {
+        const val = el.getAttribute(output)?.toLowerCase();
+        if (val) {
+          for (const keyword of keywordSet) {
+            if (val.includes(keyword)) {
+              score += 21;
+            }
+          }
+        }
+      }
+
+      // Tier 3 (0.3): 结构/属性匹配 (id, class, name)
+      // 映射为 9 分
+      const structAttrs = ['id', 'class', 'name', 'data-testid'];
+      for (const attr of structAttrs) {
+        const val = el.getAttribute(attr)?.toLowerCase();
+        if (val) {
+          for (const keyword of keywordSet) {
+            if (val.includes(keyword)) {
+              score += 9;
+            }
+          }
+        }
+      }
+
+      // 额外的结构加分
+      if (el.id) score += 5; // ID 选择器非常有用
 
       return score;
     };

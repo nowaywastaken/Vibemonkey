@@ -62,6 +62,19 @@ export interface DeepSeekConfig {
 const DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_MODEL = 'deepseek/deepseek-v3.2';
 
+export interface ChatStreamEvent {
+  id: string;
+  choices: {
+    index: number;
+    delta: {
+      role?: 'assistant';
+      content?: string;
+      tool_calls?: ToolCall[];
+    };
+    finish_reason: string | null;
+  }[];
+}
+
 export class DeepSeekClient {
   private apiKey: string;
   private baseUrl: string;
@@ -107,6 +120,71 @@ export class DeepSeekClient {
   }
 
   /**
+   * 流式聊天请求
+   */
+  async *chatStream(messages: Message[], tools?: Tool[]): AsyncGenerator<ChatStreamEvent> {
+    const body: Record<string, unknown> = {
+      model: this.model,
+      messages,
+      stream: true,
+    };
+
+    if (tools && tools.length > 0) {
+      body.tools = tools;
+      body.tool_choice = 'auto';
+    }
+
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+        'HTTP-Referer': 'chrome-extension://vibemonkey',
+        'X-Title': 'VibeMokey',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`DeepSeek API error: ${response.status} - ${error}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('Response body is not readable');
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.trim() === '') continue;
+          if (line.includes('[DONE]')) return;
+
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              yield data;
+            } catch (e) {
+              console.warn('Failed to parse SSE message:', line);
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  /**
    * 带思考模式的聊天请求
    * 使用 DeepSeek 的 thinking mode 进行深度推理
    */
@@ -138,6 +216,7 @@ export class DeepSeekClient {
     let currentMessages = [...messages];
     
     for (let i = 0; i < maxIterations; i++) {
+      // 这里的实现目前还是非流式的，后续可以升级为流式
       const response = await this.chat(currentMessages, tools);
       const choice = response.choices[0];
       

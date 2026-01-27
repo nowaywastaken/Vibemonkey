@@ -13,6 +13,8 @@ import { createHistoryManager, HistoryManager, ScriptHistoryItem, HistoryFilter 
 import { createCodeAuditor, CodeAuditor, AuditResult, formatAuditResult } from '@/lib/script/auditor';
 import { initializeCompiler, compileTypeScript, validateTypeScript, CompileResult } from '@/lib/compiler/typescript-compiler';
 import { createScriptManager, ScriptManager } from '@/lib/script/manager';
+import { createScriptVersionManager, ScriptVersionManager, extractMainDomain } from '@/lib/script/script-version-manager';
+import { createAgentContextBuilder, AgentContextBuilder, AgentContext } from '@/lib/agent/agent-context';
 
 // 全局状态
 let deepseekClient: DeepSeekClient | null = null;
@@ -22,6 +24,13 @@ let healingSystem: SelfHealingSystem | null = null;
 let historyManager: HistoryManager | null = null;
 let codeAuditor: CodeAuditor | null = null;
 let scriptManager: ScriptManager | null = null;
+let scriptVersionManager: ScriptVersionManager | null = null;
+let agentContextBuilder: AgentContextBuilder | null = null;
+
+// Agent 状态
+type AgentStatus = 'idle' | 'thinking' | 'writing' | 'tool_calling' | 'error';
+let currentAgentStatus: AgentStatus = 'idle';
+let currentAgentMessage: string = '';
 
 // 消息类型定义
 interface GenerateScriptMessage {
@@ -96,6 +105,26 @@ interface GetMatchingScriptsMessage {
   payload: { url: string };
 }
 
+// 新增消息类型
+interface GetScriptListMessage {
+  type: 'GET_SCRIPT_LIST';
+  payload: { url: string };
+}
+
+interface ToggleScriptMessage {
+  type: 'TOGGLE_SCRIPT';
+  payload: { scriptId: string; enabled: boolean };
+}
+
+interface GetScriptHistoryMessage {
+  type: 'GET_SCRIPT_HISTORY';
+  payload: { scriptId: string; version?: number };
+}
+
+interface GetAgentStatusMessage {
+  type: 'GET_AGENT_STATUS';
+}
+
 type ExtensionMessage = 
   | GenerateScriptMessage 
   | AnalyzeDOMMessage 
@@ -107,7 +136,11 @@ type ExtensionMessage =
   | AuditScriptMessage
   | CompileTypeScriptMessage
   | ValidateTypeScriptMessage
-  | GetMatchingScriptsMessage;
+  | GetMatchingScriptsMessage
+  | GetScriptListMessage
+  | ToggleScriptMessage
+  | GetScriptHistoryMessage
+  | GetAgentStatusMessage;
 
 export default defineBackground(() => {
   console.log('[VibeMokey] Background service worker started');
@@ -120,11 +153,100 @@ export default defineBackground(() => {
     handleMessage(message, sender).then(sendResponse);
     return true; // 表示异步响应
   });
+
+  // 监听长连接
+  browser.runtime.onConnect.addListener((port) => {
+    if (port.name === 'vibemonkey-stream') {
+      console.log('[VibeMokey] Stream port connected');
+      activePorts.add(port);
+      
+      // 发送当前状态
+      port.postMessage({
+        type: 'AGENT_STATUS_UPDATE',
+        payload: { status: currentAgentStatus, message: currentAgentMessage },
+      });
+
+      port.onDisconnect.addListener(() => {
+        console.log('[VibeMokey] Stream port disconnected');
+        activePorts.delete(port);
+      });
+
+      // 处理来自 Popup 的流式生成请求
+      port.onMessage.addListener(async (message) => {
+        if (message.type === 'GENERATE_SCRIPT_STREAM') {
+          await handleGenerateScriptStream(message.payload);
+        }
+      });
+    }
+  });
+
+  // P2: MV3 持久化 - 心跳机制
+  browser.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === 'keep-alive') {
+      console.log('[VibeMokey] Keep-alive alarm triggered');
+    }
+  });
 });
+
+/**
+ * 启动保活心跳
+ */
+function startKeepAlive() {
+  browser.alarms.create('keep-alive', { periodInMinutes: 0.5 });
+}
+
+/**
+ * 停止保活心跳
+ */
+function stopKeepAlive() {
+  browser.alarms.clear('keep-alive');
+}
 
 /**
  * 初始化各种客户端
  */
+// 活跃的连接端口
+const activePorts = new Set<browser.Runtime.Port>();
+
+
+
+/**
+ * 广播消息给所有活跃端口
+ */
+function broadcastMessage(message: any) {
+  activePorts.forEach(port => {
+    try {
+      port.postMessage(message);
+    } catch (e) {
+      activePorts.delete(port);
+    }
+  });
+}
+
+/**
+ * 更新 Agent 状态（支持流式广播）
+ */
+function updateAgentStatus(status: AgentStatus, message?: string): void {
+  currentAgentStatus = status;
+  if (message !== undefined) {
+    currentAgentMessage = message;
+  }
+  
+  const payload = { status, message: currentAgentMessage };
+  
+  // 广播状态变化给 Popup (Port)
+  broadcastMessage({
+    type: 'AGENT_STATUS_UPDATE',
+    payload,
+  });
+
+  // 同时也发送给传统的 onMessage 监听器
+  browser.runtime.sendMessage({
+    type: 'AGENT_STATUS_UPDATE',
+    payload,
+  }).catch(() => {});
+}
+
 async function initializeClients(): Promise<void> {
   try {
     deepseekClient = await createDeepSeekClient();
@@ -134,7 +256,9 @@ async function initializeClients(): Promise<void> {
     historyManager = createHistoryManager();
     codeAuditor = createCodeAuditor();
     scriptManager = createScriptManager();
-    console.log('[VibeMokey] Clients initialized');
+    scriptVersionManager = createScriptVersionManager();
+    agentContextBuilder = createAgentContextBuilder(scriptVersionManager);
+    console.log('[VibeMokey] Clients initialized (including version manager)');
   } catch (error) {
     console.error('[VibeMokey] Failed to initialize clients:', error);
   }
@@ -181,6 +305,18 @@ async function handleMessage(
     case 'GET_MATCHING_SCRIPTS':
       return handleGetMatchingScripts(message.payload.url);
     
+    case 'GET_SCRIPT_LIST':
+      return handleGetScriptList(message.payload.url);
+    
+    case 'TOGGLE_SCRIPT':
+      return handleToggleScript(message.payload);
+    
+    case 'GET_SCRIPT_HISTORY':
+      return handleGetScriptHistory(message.payload);
+    
+    case 'GET_AGENT_STATUS':
+      return handleGetAgentStatus();
+    
     default:
       return { error: 'Unknown message type' };
   }
@@ -201,42 +337,58 @@ async function handleGenerateScript(payload: GenerateScriptMessage['payload']): 
   }
 
   try {
+    updateAgentStatus('thinking', '正在分析需求...');
+    
     const { userRequest, currentUrl, pageInfo } = payload;
     const domain = pageInfo?.domain || new URL(currentUrl).hostname;
 
-    // 1. 搜索现有脚本
-    console.log('[VibeMokey] Searching existing scripts for:', domain);
-    const existingScripts = await scriptRepository?.searchByDomain(domain);
-    
-    // 2. 搜索相关记忆
-    let memoryContext = '';
-    if (mem0Client) {
-      const memories = await mem0Client.search(domain, { domain });
-      if (memories.length > 0) {
-        memoryContext = memories.map(m => `- ${m.content}`).join('\n');
+    // 1. 构建完整的 Agent 上下文
+    let agentContext: AgentContext | null = null;
+    if (agentContextBuilder) {
+      // 获取记忆上下文
+      let memoryContext = '';
+      if (mem0Client) {
+        const memories = await mem0Client.search(domain, { domain });
+        if (memories.length > 0) {
+          memoryContext = memories.map(m => `- ${m.content}`).join('\n');
+        }
       }
+
+      agentContext = await agentContextBuilder.buildContext(
+        currentUrl,
+        pageInfo ? { title: pageInfo.title, markdown: pageInfo.markdown || '' } : undefined,
+        memoryContext
+      );
+      console.log('[VibeMokey] Agent context built:', {
+        domain: agentContext.currentDomain,
+        activeScripts: agentContext.activeScripts.length,
+        inactiveScripts: agentContext.inactiveScripts.length,
+      });
     }
 
-    // 3. 构建 Agent 提示
-    const systemPrompt = buildSystemPrompt(existingScripts?.scripts || [], memoryContext);
+    // 2. 构建增强的系统提示（包含完整上下文）
+    const systemPrompt = buildEnhancedSystemPrompt(agentContext);
     const userPrompt = buildUserPrompt(userRequest, currentUrl, pageInfo);
 
-    // 4. 调用 DeepSeek 生成脚本
+    updateAgentStatus('writing', '正在生成脚本...');
+
+    // 3. 调用 DeepSeek 生成脚本
     const response = await deepseekClient.chatWithThinking([
       { role: 'user', content: systemPrompt + '\n\n' + userPrompt },
     ]);
 
     const content = response.choices[0]?.message.content || '';
     
-    // 5. 解析生成的脚本
-    const scriptMatch = content.match(/```(?:javascript|js)?\n([\s\S]*?)```/);
+    // 4. 解析生成的脚本（支持 TypeScript 和 JavaScript）
+    const scriptMatch = content.match(/```(?:typescript|javascript|ts|js)?\n([\s\S]*?)```/);
     if (!scriptMatch) {
+      updateAgentStatus('error', '未能生成有效脚本');
       return { success: false, error: '未能生成有效脚本' };
     }
 
     const scriptCode = scriptMatch[1].trim();
 
-    // 6. 生成完整的 Tampermonkey 脚本
+    // 5. 生成完整的 Tampermonkey 脚本
     const metadata: ScriptMetadata = {
       name: extractScriptName(content) || `VibeMokey - ${domain}`,
       description: userRequest.slice(0, 100),
@@ -246,14 +398,14 @@ async function handleGenerateScript(payload: GenerateScriptMessage['payload']): 
 
     const generated = generateFullScript(metadata, scriptCode);
 
-    // 7. 代码审计
+    // 6. 代码审计
     let auditResult: AuditResult | undefined;
     if (codeAuditor) {
       auditResult = codeAuditor.audit(generated.fullScript);
       console.log('[VibeMokey] Audit score:', auditResult.score);
     }
 
-    // 8. 保存到记忆
+    // 7. 保存到记忆
     if (mem0Client) {
       await mem0Client.add(
         `为 ${domain} 生成了脚本：${metadata.name}。用户需求：${userRequest}`,
@@ -262,7 +414,7 @@ async function handleGenerateScript(payload: GenerateScriptMessage['payload']): 
       );
     }
 
-    // 9. 保存到历史记录
+    // 8. 保存到历史记录
     if (historyManager) {
       await historyManager.add({
         name: metadata.name,
@@ -274,16 +426,30 @@ async function handleGenerateScript(payload: GenerateScriptMessage['payload']): 
       });
     }
 
-    // 10. 保存到 ScriptManager (激活脚本)
-    if (scriptManager) {
+    // 9. 保存到版本化脚本管理器（优先使用新的版本管理器）
+    if (scriptVersionManager) {
+      await scriptVersionManager.addScript({
+        name: metadata.name,
+        description: metadata.description,
+        matchPattern: urlToMatchPattern(currentUrl),
+        domain,
+        code: scriptCode,  // 保存原始 TypeScript
+        compiledCode: generated.fullScript,  // 保存编译后的完整脚本
+        userRequest,
+      });
+      console.log('[VibeMokey] Script saved to version manager');
+    } else if (scriptManager) {
+      // 回退到旧的脚本管理器
       await scriptManager.addScript({
         name: metadata.name,
         description: metadata.description,
         code: generated.fullScript,
         matches: metadata.match,
       });
-      console.log('[VibeMokey] Script activated and saved');
+      console.log('[VibeMokey] Script activated and saved (legacy)');
     }
+
+    updateAgentStatus('idle', `已成功生成脚本：${metadata.name}`);
 
     return {
       success: true,
@@ -293,10 +459,186 @@ async function handleGenerateScript(payload: GenerateScriptMessage['payload']): 
     };
   } catch (error) {
     console.error('[VibeMokey] Generate script error:', error);
+    updateAgentStatus('error', error instanceof Error ? error.message : '生成失败');
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error',
     };
+  }
+}
+
+/**
+ * 构建增强的系统提示（包含完整 Agent 上下文）
+ */
+function buildEnhancedSystemPrompt(context: AgentContext | null): string {
+  let prompt = `你是 VibeMokey，一个专业的油猴脚本生成助手。你的任务是根据用户需求生成高质量的 TypeScript 脚本。
+
+生成规则：
+1. 使用稳定的 CSS 选择器（优先使用 ID、data-* 属性）
+2. 使用 MutationObserver 处理动态加载的内容
+3. 添加必要的错误处理
+4. 代码简洁高效，添加适当注释
+5. 不要使用 eval() 或其他不安全的函数
+
+重要提示：
+- 如果用户说"这里没效果"或"旧脚本效果不佳"，请参考下方的现有脚本和历史版本
+- 如果发现未激活的脚本可以满足需求，建议用户激活该脚本
+- 注意避免与现有脚本的功能冲突`;
+
+  if (context) {
+    prompt += '\n\n' + agentContextBuilder?.formatContextForPrompt(context);
+  }
+
+  return prompt;
+}
+
+/**
+ * 处理流式脚本生成请求
+ */
+async function handleGenerateScriptStream(payload: GenerateScriptMessage['payload']): Promise<void> {
+  if (!deepseekClient) {
+    updateAgentStatus('error', '请先配置 OpenRouter API Key');
+    return;
+  }
+
+  try {
+    updateAgentStatus('thinking', '正在分析需求...');
+    
+    const { userRequest, currentUrl, pageInfo } = payload;
+    const domain = pageInfo?.domain || new URL(currentUrl).hostname;
+
+    // 1. 构建完整的 Agent 上下文
+    let agentContext: AgentContext | null = null;
+    if (agentContextBuilder) {
+      let memoryContext = '';
+      if (mem0Client) {
+        const memories = await mem0Client.search(domain, { domain });
+        if (memories.length > 0) {
+          memoryContext = memories.map(m => `- ${m.content}`).join('\n');
+        }
+      }
+
+      agentContext = await agentContextBuilder.buildContext(
+        currentUrl,
+        pageInfo ? { title: pageInfo.title, markdown: pageInfo.markdown || '' } : undefined,
+        memoryContext
+      );
+    }
+
+    // 2. 构建增强的系统提示
+    const systemPrompt = buildEnhancedSystemPrompt(agentContext);
+    const userPrompt = buildUserPrompt(userRequest, currentUrl, pageInfo);
+
+    updateAgentStatus('writing', '正在生成脚本...');
+    startKeepAlive(); // 启动保活
+
+    // 3. 调用 DeepSeek 流式生成
+    let fullContent = '';
+    
+    // 发送开始事件
+    broadcastMessage({ type: 'SCRIPT_GENERATION_START' });
+
+    for await (const chunk of deepseekClient.chatStream([
+      { role: 'user', content: systemPrompt + '\n\n' + userPrompt },
+    ])) {
+      const content = chunk.choices[0]?.delta?.content || '';
+      if (content) {
+        fullContent += content;
+        // 实时推送内容片段
+        broadcastMessage({
+          type: 'SCRIPT_GENERATION_CHUNK',
+          payload: content
+        });
+      }
+    }
+    
+    stopKeepAlive(); // 停止保活
+    
+    // 4. 解析生成的脚本
+    const scriptMatch = fullContent.match(/```(?:typescript|javascript|ts|js)?\n([\s\S]*?)```/);
+    if (!scriptMatch) {
+      updateAgentStatus('error', '未能生成有效脚本');
+      return;
+    }
+
+    const scriptCode = scriptMatch[1].trim();
+
+    // 5. 生成完整的 Tampermonkey 脚本
+    const metadata: ScriptMetadata = {
+      name: extractScriptName(fullContent) || `VibeMokey - ${domain}`,
+      description: userRequest.slice(0, 100),
+      match: [urlToMatchPattern(currentUrl)],
+      grant: ['none'],
+    };
+
+    const generated = generateFullScript(metadata, scriptCode);
+
+    // 6. 代码审计
+    let auditResult: AuditResult | undefined;
+    if (codeAuditor) {
+      auditResult = codeAuditor.audit(generated.fullScript);
+    }
+
+    // 7. 保存逻辑 (与普通生成相同)
+    if (mem0Client) {
+      await mem0Client.add(
+        `为 ${domain} 生成了脚本：${metadata.name}。用户需求：${userRequest}`,
+        'script_version',
+        { domain, scriptName: metadata.name }
+      );
+    }
+
+    if (historyManager) {
+      await historyManager.add({
+        name: metadata.name,
+        description: userRequest,
+        url: currentUrl,
+        domain,
+        script: generated.fullScript,
+        userRequest,
+      });
+    }
+
+    if (scriptVersionManager) {
+      await scriptVersionManager.addScript({
+        name: metadata.name,
+        description: metadata.description,
+        matchPattern: urlToMatchPattern(currentUrl),
+        domain,
+        code: scriptCode,
+        compiledCode: generated.fullScript,
+        userRequest,
+      });
+    } else if (scriptManager) {
+      await scriptManager.addScript({
+        name: metadata.name,
+        description: metadata.description,
+        code: generated.fullScript,
+        matches: metadata.match,
+      });
+    }
+
+    updateAgentStatus('idle', `已成功生成脚本：${metadata.name}`);
+
+    // 发送完成事件
+    broadcastMessage({
+      type: 'SCRIPT_GENERATION_COMPLETE',
+      payload: {
+        success: true,
+        script: generated.fullScript,
+        metadata,
+        auditScore: auditResult?.score,
+      }
+    });
+
+  } catch (error) {
+    stopKeepAlive(); // 停止保活
+    console.error('[VibeMokey] Generate script stream error:', error);
+    updateAgentStatus('error', error instanceof Error ? error.message : '生成失败');
+    broadcastMessage({
+      type: 'SCRIPT_GENERATION_ERROR',
+      payload: error instanceof Error ? error.message : 'Unknown error'
+    });
   }
 }
 
@@ -553,3 +895,130 @@ async function handleGetMatchingScripts(url: string): Promise<{ success: boolean
     return { success: false, scripts: [] };
   }
 }
+
+/**
+ * 获取脚本列表（按当前域名分组，供 Popup 使用）
+ */
+async function handleGetScriptList(url: string): Promise<{
+  success: boolean;
+  domain: string;
+  activeScripts: { id: string; name: string; matchPattern: string; description: string }[];
+  inactiveScripts: { id: string; name: string; matchPattern: string; description: string }[];
+  otherDomainScripts: { id: string; name: string; domain: string; matchPattern: string }[];
+}> {
+  if (!agentContextBuilder) {
+    return {
+      success: false,
+      domain: '',
+      activeScripts: [],
+      inactiveScripts: [],
+      otherDomainScripts: [],
+    };
+  }
+
+  try {
+    const result = await agentContextBuilder.getScriptListForPopup(url);
+    return {
+      success: true,
+      ...result,
+    };
+  } catch (error) {
+    console.error('[VibeMokey] Get script list error:', error);
+    return {
+      success: false,
+      domain: '',
+      activeScripts: [],
+      inactiveScripts: [],
+      otherDomainScripts: [],
+    };
+  }
+}
+
+/**
+ * 切换脚本启用状态
+ */
+async function handleToggleScript(payload: { scriptId: string; enabled: boolean }): Promise<{
+  success: boolean;
+  script?: any;
+}> {
+  if (!scriptVersionManager) {
+    return { success: false };
+  }
+
+  try {
+    const script = await scriptVersionManager.toggleScript(payload.scriptId, payload.enabled);
+    if (script) {
+      currentAgentMessage = `已${payload.enabled ? '启用' : '禁用'}脚本：${script.name}`;
+    }
+    return { success: !!script, script };
+  } catch (error) {
+    console.error('[VibeMokey] Toggle script error:', error);
+    return { success: false };
+  }
+}
+
+/**
+ * 获取脚本历史版本
+ */
+async function handleGetScriptHistory(payload: { scriptId: string; version?: number }): Promise<{
+  success: boolean;
+  versions?: { version: number; createdAt: number; changeNote?: string; code?: string }[];
+  specificVersion?: { version: number; code: string; createdAt: number; userRequest?: string };
+}> {
+  if (!scriptVersionManager) {
+    return { success: false };
+  }
+
+  try {
+    const script = await scriptVersionManager.getScript(payload.scriptId);
+    if (!script) {
+      return { success: false };
+    }
+
+    if (payload.version !== undefined) {
+      // 获取特定版本的完整代码
+      const versionData = await scriptVersionManager.getScriptVersion(payload.scriptId, payload.version);
+      if (versionData) {
+        return {
+          success: true,
+          specificVersion: {
+            version: versionData.version,
+            code: versionData.code,
+            createdAt: versionData.createdAt,
+            userRequest: versionData.userRequest,
+          },
+        };
+      }
+      return { success: false };
+    }
+
+    // 返回所有版本的摘要
+    return {
+      success: true,
+      versions: script.versions.map(v => ({
+        version: v.version,
+        createdAt: v.createdAt,
+        changeNote: v.changeNote,
+      })),
+    };
+  } catch (error) {
+    console.error('[VibeMokey] Get script history error:', error);
+    return { success: false };
+  }
+}
+
+/**
+ * 获取 Agent 状态
+ */
+function handleGetAgentStatus(): {
+  status: AgentStatus;
+  message: string;
+} {
+  return {
+    status: currentAgentStatus,
+    message: currentAgentMessage,
+  };
+}
+
+
+

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>VibeMokey</title>
+    <title>Vibemonkey</title>
     <meta name="manifest.type" content="browser_action" />
   </head>
   <body>
@@ -12,73 +12,96 @@
       <header class="header">
         <div class="logo">
           <span class="logo-icon">🐵</span>
-          <span class="logo-text">VibeMokey</span>
+          <span class="logo-text">Vibemonkey</span>
         </div>
-        <button id="settings-btn" class="icon-btn" title="设置">⚙️</button>
+        <div class="header-actions">
+          <label class="toggle-switch" title="扩展启用状态">
+            <input type="checkbox" id="extension-toggle" checked />
+            <span class="toggle-slider"></span>
+          </label>
+          <button id="settings-btn" class="icon-btn" title="设置">⚙️</button>
+        </div>
       </header>
 
-      <!-- Status Bar -->
-      <div id="status-bar" class="status-bar">
-        <span id="status-indicator" class="status-indicator offline"></span>
-        <span id="status-text">未连接</span>
+      <!-- Current Domain Info -->
+      <div class="domain-bar">
+        <span class="domain-icon">🌐</span>
+        <span id="current-domain" class="current-domain">-</span>
       </div>
 
-      <!-- Tab Navigation -->
-      <div class="tab-nav">
-        <button class="tab-btn active" data-tab="generate">✨ 生成</button>
-        <button class="tab-btn" data-tab="history">📜 历史</button>
-      </div>
+      <!-- Script List for Current Domain -->
+      <section class="scripts-section">
+        <h3 class="section-title">📂 当前域名下的脚本</h3>
+        
+        <!-- Active Scripts -->
+        <div id="active-scripts" class="script-list">
+          <div class="empty-state">无激活脚本</div>
+        </div>
+        
+        <!-- Inactive Scripts -->
+        <div id="inactive-scripts" class="script-list inactive">
+          <!-- Will be populated dynamically -->
+        </div>
+      </section>
 
-      <!-- Main Content -->
-      <main class="main-content">
-        <!-- Request Input -->
-        <div class="input-section">
-          <label for="user-request">描述你的需求</label>
+      <!-- Chat Input Section -->
+      <section class="chat-section">
+        <div class="input-container">
           <textarea 
             id="user-request" 
-            placeholder="例如：为这个页面添加一键复制代码按钮..."
-            rows="3"
+            placeholder="描述你的需求..."
+            rows="2"
           ></textarea>
-        </div>
-
-        <!-- Current Page Info -->
-        <div class="page-info">
-          <span class="page-icon">📄</span>
-          <span id="current-url" class="current-url">-</span>
-        </div>
-
-        <!-- Action Buttons -->
-        <div class="actions">
-          <button id="analyze-btn" class="btn btn-secondary">
-            🔍 分析页面
-          </button>
-          <button id="generate-btn" class="btn btn-primary">
-            ✨ 生成脚本
+          <button id="send-btn" class="send-btn" title="发送">
+            <span class="send-icon">➤</span>
           </button>
         </div>
+      </section>
 
-        <!-- Result Section -->
-        <div id="result-section" class="result-section hidden">
-          <div class="result-header">
-            <h3>生成结果 <span id="audit-score" class="audit-score"></span></h3>
-            <button id="copy-btn" class="icon-btn" title="复制">📋</button>
-          </div>
-          <pre id="script-output" class="script-output"></pre>
+      <!-- Agent Status & Message -->
+      <section class="agent-section">
+        <div class="agent-status">
+          <span id="status-indicator" class="status-dot idle"></span>
+          <span id="status-text" class="status-text">空闲</span>
         </div>
+        <div id="agent-message" class="agent-message hidden">
+          <span class="message-icon">💬</span>
+          <span id="agent-message-text" class="message-text"></span>
+        </div>
+      </section>
 
-        <!-- Loading Overlay -->
-        <div id="loading" class="loading hidden">
-          <div class="spinner"></div>
-          <span id="loading-text">正在生成...</span>
+      <!-- Result Section (shows generated script) -->
+      <div id="result-section" class="result-section hidden">
+        <div class="result-header">
+          <h3>生成结果 <span id="audit-score" class="audit-score"></span></h3>
+          <button id="copy-btn" class="icon-btn" title="复制">📋</button>
         </div>
-      </main>
-
-      <!-- History Tab Panel -->
-      <div id="history-panel" class="tab-panel hidden">
-        <div id="history-list" class="history-list">
-          <div class="history-empty">暂无历史记录</div>
-        </div>
+        <pre id="script-output" class="script-output"></pre>
       </div>
+
+      <!-- Model & Token Info -->
+      <footer class="footer">
+        <div class="model-info">
+          <span class="model-icon">🤖</span>
+          <span id="model-name">DeepSeek V3.2 via OpenRouter</span>
+        </div>
+        <div class="token-info">
+          <span class="token-icon">📊</span>
+          <span id="token-usage">0 / 10000000</span>
+        </div>
+      </footer>
+
+      <!-- Other Domain Scripts (Collapsible) -->
+      <section class="other-scripts-section collapsed">
+        <button id="toggle-other-scripts" class="section-toggle">
+          <span class="toggle-icon">▶</span>
+          <span>📁 其他域名的脚本</span>
+          <span id="other-scripts-count" class="count-badge">0</span>
+        </button>
+        <div id="other-scripts" class="other-scripts-list hidden">
+          <!-- Will be populated dynamically -->
+        </div>
+      </section>
 
       <!-- Settings Modal -->
       <div id="settings-modal" class="modal hidden">
@@ -107,6 +130,12 @@
             <button id="save-settings" class="btn btn-primary">保存</button>
           </div>
         </div>
+      </div>
+
+      <!-- Loading Overlay -->
+      <div id="loading" class="loading hidden">
+        <div class="spinner"></div>
+        <span id="loading-text">正在处理...</span>
       </div>
     </div>
     <script type="module" src="./main.ts"></script>
