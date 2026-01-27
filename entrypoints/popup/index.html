@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VibeMokey</title>
+    <meta name="manifest.type" content="browser_action" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Header -->
+      <header class="header">
+        <div class="logo">
+          <span class="logo-icon">🐵</span>
+          <span class="logo-text">VibeMokey</span>
+        </div>
+        <button id="settings-btn" class="icon-btn" title="设置">⚙️</button>
+      </header>
+
+      <!-- Status Bar -->
+      <div id="status-bar" class="status-bar">
+        <span id="status-indicator" class="status-indicator offline"></span>
+        <span id="status-text">未连接</span>
+      </div>
+
+      <!-- Tab Navigation -->
+      <div class="tab-nav">
+        <button class="tab-btn active" data-tab="generate">✨ 生成</button>
+        <button class="tab-btn" data-tab="history">📜 历史</button>
+      </div>
+
+      <!-- Main Content -->
+      <main class="main-content">
+        <!-- Request Input -->
+        <div class="input-section">
+          <label for="user-request">描述你的需求</label>
+          <textarea 
+            id="user-request" 
+            placeholder="例如：为这个页面添加一键复制代码按钮..."
+            rows="3"
+          ></textarea>
+        </div>
+
+        <!-- Current Page Info -->
+        <div class="page-info">
+          <span class="page-icon">📄</span>
+          <span id="current-url" class="current-url">-</span>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="actions">
+          <button id="analyze-btn" class="btn btn-secondary">
+            🔍 分析页面
+          </button>
+          <button id="generate-btn" class="btn btn-primary">
+            ✨ 生成脚本
+          </button>
+        </div>
+
+        <!-- Result Section -->
+        <div id="result-section" class="result-section hidden">
+          <div class="result-header">
+            <h3>生成结果 <span id="audit-score" class="audit-score"></span></h3>
+            <button id="copy-btn" class="icon-btn" title="复制">📋</button>
+          </div>
+          <pre id="script-output" class="script-output"></pre>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loading" class="loading hidden">
+          <div class="spinner"></div>
+          <span id="loading-text">正在生成...</span>
+        </div>
+      </main>
+
+      <!-- History Tab Panel -->
+      <div id="history-panel" class="tab-panel hidden">
+        <div id="history-list" class="history-list">
+          <div class="history-empty">暂无历史记录</div>
+        </div>
+      </div>
+
+      <!-- Settings Modal -->
+      <div id="settings-modal" class="modal hidden">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>设置</h3>
+            <button id="close-settings" class="icon-btn">✕</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label for="openrouter-key">OpenRouter API Key</label>
+              <input 
+                type="password" 
+                id="openrouter-key" 
+                placeholder="sk-or-v1-..."
+              />
+            </div>
+            <div class="form-group">
+              <label for="mem0-key">Mem0 API Key (可选)</label>
+              <input 
+                type="password" 
+                id="mem0-key" 
+                placeholder="mem0_..."
+              />
+            </div>
+            <button id="save-settings" class="btn btn-primary">保存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

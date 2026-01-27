@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VibeMokey 设置</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="options-container">
+    <header class="options-header">
+      <div class="logo">
+        <span class="logo-icon">🐵</span>
+        <span class="logo-text">VibeMokey 设置</span>
+      </div>
+    </header>
+
+    <main class="options-main">
+      <!-- API 配置 -->
+      <section class="options-section">
+        <h2>🔑 API 配置</h2>
+        
+        <div class="form-group">
+          <label for="openrouter-key">OpenRouter API Key</label>
+          <input 
+            type="password" 
+            id="openrouter-key" 
+            placeholder="sk-or-v1-..."
+          />
+          <p class="form-help">用于调用 DeepSeek V3.2 模型生成脚本</p>
+        </div>
+
+        <div class="form-group">
+          <label for="mem0-key">Mem0 API Key (可选)</label>
+          <input 
+            type="password" 
+            id="mem0-key" 
+            placeholder="mem0_..."
+          />
+          <p class="form-help">用于云端记忆存储，留空则使用本地存储</p>
+        </div>
+      </section>
+
+      <!-- 生成设置 -->
+      <section class="options-section">
+        <h2>⚙️ 生成设置</h2>
+        
+        <div class="form-group">
+          <label for="default-target">默认编译目标</label>
+          <select id="default-target">
+            <option value="es2020">ES2020 (推荐)</option>
+            <option value="es2019">ES2019</option>
+            <option value="es2018">ES2018</option>
+            <option value="es2017">ES2017</option>
+            <option value="es5">ES5 (兼容旧浏览器)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="auto-audit" checked />
+            <span>自动代码审计</span>
+          </label>
+          <p class="form-help">生成脚本后自动进行安全性检查</p>
+        </div>
+
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="save-history" checked />
+            <span>保存生成历史</span>
+          </label>
+          <p class="form-help">保存生成的脚本到历史记录</p>
+        </div>
+
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="use-memory" checked />
+            <span>启用记忆系统</span>
+          </label>
+          <p class="form-help">记住用户偏好和网站知识</p>
+        </div>
+      </section>
+
+      <!-- DOM 分析设置 -->
+      <section class="options-section">
+        <h2>🔍 DOM 分析设置</h2>
+        
+        <div class="form-group">
+          <label for="prune-depth">剪枝深度</label>
+          <select id="prune-depth">
+            <option value="3">浅层 (3 层)</option>
+            <option value="5" selected>标准 (5 层)</option>
+            <option value="8">深层 (8 层)</option>
+            <option value="10">完整 (10 层)</option>
+          </select>
+          <p class="form-help">控制 DOM 分析的深度，更深的分析会提供更多上下文但速度较慢</p>
+        </div>
+
+        <div class="form-group">
+          <label for="max-elements">最大元素数</label>
+          <input 
+            type="number" 
+            id="max-elements" 
+            value="500"
+            min="100"
+            max="2000"
+          />
+          <p class="form-help">限制传递给 AI 的 DOM 元素数量</p>
+        </div>
+      </section>
+
+      <!-- 外观设置 -->
+      <section class="options-section">
+        <h2>🎨 外观设置</h2>
+        
+        <div class="form-group">
+          <label for="theme">主题</label>
+          <select id="theme">
+            <option value="dark" selected>深色</option>
+            <option value="light">浅色</option>
+            <option value="system">跟随系统</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="language">界面语言</label>
+          <select id="language">
+            <option value="zh-CN" selected>简体中文</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- 数据管理 -->
+      <section class="options-section">
+        <h2>📦 数据管理</h2>
+        
+        <div class="button-group">
+          <button id="export-data" class="btn btn-secondary">
+            📤 导出数据
+          </button>
+          <button id="import-data" class="btn btn-secondary">
+            📥 导入数据
+          </button>
+          <button id="clear-history" class="btn btn-danger">
+            🗑️ 清空历史
+          </button>
+          <button id="clear-memory" class="btn btn-danger">
+            🧹 清空记忆
+          </button>
+        </div>
+      </section>
+
+      <!-- 保存按钮 -->
+      <div class="save-section">
+        <button id="save-settings" class="btn btn-primary btn-large">
+          💾 保存设置
+        </button>
+        <span id="save-status" class="save-status"></span>
+      </div>
+    </main>
+
+    <footer class="options-footer">
+      <p>VibeMokey v1.0.0 | 由 DeepSeek V3.2 驱动</p>
+    </footer>
+  </div>
+
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>
