@@ -500,7 +500,7 @@ async function handleGenerateScript(payload: GenerateScriptMessage['payload']): 
 
     return {
       success: true,
-      script: generated.fullScript,
+      script: fullScript,
       metadata,
       auditScore: auditResult?.score,
     };
