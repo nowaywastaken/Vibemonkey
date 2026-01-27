@@ -428,6 +428,390 @@ export const getCommunityScriptDetailTool: Tool = {
 };
 
 /**
+ * 获取脚本列表工具
+ */
+export const getScriptsTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'get_scripts',
+    description: '获取已保存的脚本列表。可以按域名过滤。',
+    parameters: {
+      type: 'object',
+      properties: {
+        domain: {
+          type: 'string',
+          description: '按域名过滤（可选）',
+        },
+      },
+      required: [],
+    },
+  },
+};
+
+/**
+ * 更新脚本工具
+ */
+export const updateScriptTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'update_script',
+    description: '更新现有脚本的内容或元数据',
+    parameters: {
+      type: 'object',
+      properties: {
+        scriptId: {
+          type: 'string',
+          description: '要更新的脚本 ID',
+        },
+        updates: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            description: { type: 'string' },
+            code: { type: 'string', description: 'TypeScript 源码' },
+            enabled: { type: 'boolean' },
+            changeNote: { type: 'string', description: '本次修改的说明' },
+          },
+        },
+      },
+      required: ['scriptId', 'updates'],
+    },
+  },
+};
+
+/**
+ * 删除脚本工具
+ */
+export const deleteScriptTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'delete_script',
+    description: '彻底删除指定的脚本',
+    parameters: {
+      type: 'object',
+      properties: {
+        scriptId: {
+          type: 'string',
+          description: '要删除的脚本 ID',
+        },
+      },
+      required: ['scriptId'],
+    },
+  },
+};
+
+/**
+ * 回滚脚本工具
+ */
+export const rollbackScriptTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'rollback_script',
+    description: '将脚本回滚到指定的历史版本',
+    parameters: {
+      type: 'object',
+      properties: {
+        scriptId: {
+          type: 'string',
+          description: '脚本 ID',
+        },
+        version: {
+          type: 'number',
+          description: '目标版本号',
+        },
+      },
+      required: ['scriptId', 'version'],
+    },
+  },
+};
+
+/**
+ * 请求确认工具
+ */
+export const requestConfirmationTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'request_confirmation',
+    description: '向用户请求确认操作（如：是否要删除脚本？是否要启用某个有风险的脚本？）',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: {
+          type: 'string',
+          description: '要询问用户的问题',
+        },
+        choices: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '可选的选项，默认为 ["确认", "取消"]',
+        },
+      },
+      required: ['question'],
+    },
+  },
+};
+
+/**
+ * 请求输入工具
+ */
+export const requestInputTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'request_input',
+    description: '向用户请求文本输入（如：请输入你想要自动填写的表单内容）',
+    parameters: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: '提示语',
+        },
+        placeholder: {
+          type: 'string',
+          description: '输入框占位符',
+        },
+      },
+      required: ['prompt'],
+    },
+  },
+};
+
+/**
+ * 获取当前标签页工具
+ */
+export const getCurrentTabTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'get_current_tab',
+    description: '获取当前活动标签页的 URL、标题和域名',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
+/**
+ * 获取存储数据工具
+ */
+export const getStorageTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'get_storage',
+    description: '获取扩展存储中的数据',
+    parameters: {
+      type: 'object',
+      properties: {
+        keys: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '要获取的键名列表',
+        },
+      },
+      required: ['keys'],
+    },
+  },
+};
+
+/**
+ * 设置存储数据工具
+ */
+export const setStorageTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'set_storage',
+    description: '将数据保存到扩展存储中',
+    parameters: {
+      type: 'object',
+      properties: {
+        data: {
+          type: 'object',
+          description: '键值对数据',
+        },
+      },
+      required: ['data'],
+    },
+  },
+};
+
+/**
+ * 获取脚本演进记忆工具
+ */
+export const getScriptEvolutionTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'get_script_evolution',
+    description: '获取脚本的演进记录，对比不同版本的修改原因和反馈。用于分析“脚本退化”问题。',
+    parameters: {
+      type: 'object',
+      properties: {
+        scriptId: {
+          type: 'string',
+          description: '脚本 ID',
+        },
+      },
+      required: ['scriptId'],
+    },
+  },
+};
+
+/**
+ * 检测脚本冲突工具
+ */
+export const detectConflictsTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'detect_conflicts',
+    description: '检测新脚本与现有脚本之间是否存在潜在的选择器或逻辑冲突',
+    parameters: {
+      type: 'object',
+      properties: {
+        matchUrls: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '新脚本的匹配 URL 列表',
+        },
+        code: {
+          type: 'string',
+          description: '新脚本的代码',
+        },
+      },
+      required: ['matchUrls', 'code'],
+    },
+  },
+};
+
+/**
+ * 获取 Token 用量工具
+ */
+export const getTokenUsageTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'get_token_usage',
+    description: '获取当前 AI 模型使用的 Token 数量和剩余额度',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+};
+
+/**
+ * 导入社区脚本工具
+ */
+export const importCommunityScriptTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'import_community_script',
+    description: '导入社区脚本并根据当前页面进行自动适配',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: '脚本 URL',
+        },
+        autoAdapt: {
+          type: 'boolean',
+          description: '是否自动适配当前页面',
+        },
+      },
+      required: ['url'],
+    },
+  },
+};
+
+/**
+ * 更新记忆工具
+ */
+export const updateMemoryTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'update_memory',
+    description: '更新记忆系统中的现有记录',
+    parameters: {
+      type: 'object',
+      properties: {
+        memoryId: {
+          type: 'string',
+          description: '记忆 ID',
+        },
+        content: {
+          type: 'string',
+          description: '新内容',
+        },
+      },
+      required: ['memoryId', 'content'],
+    },
+  },
+};
+
+/**
+ * 删除记忆工具
+ */
+export const deleteMemoryTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'delete_memory',
+    description: '从记忆系统中删除特定记录',
+    parameters: {
+      type: 'object',
+      properties: {
+        memoryId: {
+          type: 'string',
+          description: '记忆 ID',
+        },
+      },
+      required: ['memoryId'],
+    },
+  },
+};
+
+/**
+ * 立即执行脚本工具
+ */
+export const executeScriptTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'execute_script',
+    description: '在当前页面立即执行指定的脚本（无需刷新）',
+    parameters: {
+      type: 'object',
+      properties: {
+        scriptId: {
+          type: 'string',
+          description: '脚本 ID',
+        },
+      },
+      required: ['scriptId'],
+    },
+  },
+};
+
+/**
+ * 停止脚本工具
+ */
+export const stopScriptTool: Tool = {
+  type: 'function',
+  function: {
+    name: 'stop_script',
+    description: '停止当前页面正在运行的脚本。注意：某些脚本可能无法完全停止，可能需要刷新页面。',
+    parameters: {
+      type: 'object',
+      properties: {
+        scriptId: {
+          type: 'string',
+          description: '脚本 ID',
+        },
+      },
+      required: ['scriptId'],
+    },
+  },
+};
+
+/**
  * 获取所有可用工具
  */
 export function getAllTools(): Tool[] {
@@ -449,6 +833,24 @@ export function getAllTools(): Tool[] {
     fetchNetworkLogsTool,
     toggleScriptTool,
     testScriptTool,
+    getScriptsTool,
+    updateScriptTool,
+    deleteScriptTool,
+    rollbackScriptTool,
+    requestConfirmationTool,
+    requestInputTool,
+    getCurrentTabTool,
+    getStorageTool,
+    setStorageTool,
+    getScriptEvolutionTool,
+    detectConflictsTool,
+    getTokenUsageTool,
+    // 新增
+    importCommunityScriptTool,
+    updateMemoryTool,
+    deleteMemoryTool,
+    executeScriptTool,
+    stopScriptTool,
   ];
 }
 
@@ -473,5 +875,23 @@ export const toolsMap: Record<string, Tool> = {
   fetch_network_logs: fetchNetworkLogsTool,
   toggle_script: toggleScriptTool,
   test_script: testScriptTool,
+  get_scripts: getScriptsTool,
+  update_script: updateScriptTool,
+  delete_script: deleteScriptTool,
+  rollback_script: rollbackScriptTool,
+  request_confirmation: requestConfirmationTool,
+  request_input: requestInputTool,
+  get_current_tab: getCurrentTabTool,
+  get_storage: getStorageTool,
+  set_storage: setStorageTool,
+  get_script_evolution: getScriptEvolutionTool,
+  detect_conflicts: detectConflictsTool,
+  get_token_usage: getTokenUsageTool,
+  // 新增
+  import_community_script: importCommunityScriptTool,
+  update_memory: updateMemoryTool,
+  delete_memory: deleteMemoryTool,
+  execute_script: executeScriptTool,
+  stop_script: stopScriptTool,
 };
 

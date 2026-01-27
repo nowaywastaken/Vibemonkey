@@ -1094,9 +1094,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         
         const domResult = await handleAnalyzeDOM({ 
           tabId: tab.id, 
-          keywords: (args.keywords as string[]) || (args.selectors as string)?.split(',') || [] ,
-          weights: args.weights as Record<string, number>,
-          topN: args.topN as number
+          keywords: (args.keywords as string[]) || (args.selectors as string)?.split(',') || [] 
         });
         return JSON.stringify(domResult);
       }
@@ -1213,7 +1211,6 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         const message = args.message as string;
         const type = (args.type as string) || 'info';
         await updateAgentStatus('idle', message);
-        // 发送到 Port
         broadcastMessage({
           type: 'AGENT_STATUS_UPDATE',
           payload: { status: 'idle', message: `Agent: ${message}` }
@@ -1236,8 +1233,6 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       case 'monitor_console_errors': {
         const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
         if (!tab?.id) return JSON.stringify({ error: 'No active tab' });
-        
-        // 这是一个模拟，实际可能需要 Content Script 配合
         const errors = await browser.tabs.sendMessage(tab.id, { type: 'GET_RECENT_ERRORS' });
         return JSON.stringify(errors);
       }
@@ -1248,9 +1243,35 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         
         const logs = await browser.tabs.sendMessage(tab.id, { 
           type: 'GET_NETWORK_STATS',
-          payload: { url_pattern: args.url_pattern }
+          payload: { urlPattern: args.url_pattern }
         });
         return JSON.stringify(logs);
+      }
+
+      case 'get_scripts': {
+        if (!scriptVersionManager) return JSON.stringify({ error: 'Not initialized' });
+        const scripts = args.domain 
+          ? await scriptVersionManager.getScriptsByDomain(args.domain as string)
+          : await scriptVersionManager.getAllScripts();
+        return JSON.stringify(scripts);
+      }
+
+      case 'update_script': {
+        if (!scriptVersionManager) return JSON.stringify({ error: 'Not initialized' });
+        const res = await scriptVersionManager.updateScript(args.scriptId as string, args.updates as any);
+        return JSON.stringify({ success: !!res, script: res });
+      }
+
+      case 'delete_script': {
+        if (!scriptVersionManager) return JSON.stringify({ error: 'Not initialized' });
+        const res = await scriptVersionManager.deleteScript(args.scriptId as string);
+        return JSON.stringify({ success: res });
+      }
+
+      case 'rollback_script': {
+        if (!scriptVersionManager) return JSON.stringify({ error: 'Not initialized' });
+        const res = await scriptVersionManager.rollbackToVersion(args.scriptId as string, args.version as number);
+        return JSON.stringify({ success: !!res, script: res });
       }
 
       case 'toggle_script': {
@@ -1261,15 +1282,78 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         return JSON.stringify({ error: 'Version manager not initialized' });
       }
 
+      case 'request_confirmation': {
+        const result = await requestUserInteraction('CONFIRMATION', args);
+        return JSON.stringify({ result });
+      }
+
+      case 'request_input': {
+        const result = await requestUserInteraction('INPUT', args);
+        return JSON.stringify({ result });
+      }
+
+      case 'get_current_tab': {
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        if (!tab) return JSON.stringify({ error: 'No active tab' });
+        return JSON.stringify({
+          url: tab.url,
+          title: tab.title,
+          domain: tab.url ? new URL(tab.url).hostname : ''
+        });
+      }
+
+      case 'get_storage': {
+        const keys = args.keys as string[];
+        const res = await browser.storage.local.get(keys);
+        return JSON.stringify(res);
+      }
+
+      case 'set_storage': {
+        const data = args.data as Record<string, any>;
+        await browser.storage.local.set(data);
+        return JSON.stringify({ success: true });
+      }
+
+      case 'get_script_evolution': {
+        if (!mem0Client || !args.scriptId) return JSON.stringify({ error: 'Missing client or id' });
+        const memories = await mem0Client.search(args.scriptId as string, { type: 'script_version' });
+        return JSON.stringify(memories);
+      }
+
+      case 'detect_conflicts': {
+        if (!scriptVersionManager) return JSON.stringify({ error: 'Not initialized' });
+        const allScripts = await scriptVersionManager.getAllScripts();
+        const conflicts = [];
+        const newUrls = args.matchUrls as string[];
+        
+        for (const script of allScripts) {
+          if (!script.enabled) continue;
+          // 简单检查：如果有重叠的 URL 模式，可能存在冲突
+          if (newUrls.some(u => script.matchPattern === u || script.matchPattern === '<all_urls>' || u === '<all_urls>')) {
+            conflicts.push({
+              scriptId: script.id,
+              name: script.name,
+              reason: '匹配 URL 模式重叠'
+            });
+          }
+        }
+        return JSON.stringify({ hasConflict: conflicts.length > 0, conflicts });
+      }
+
+      case 'get_token_usage': {
+        // 模拟实现
+        const usage = await browser.storage.local.get('token_usage');
+        return JSON.stringify(usage.token_usage || { used: 0, limit: 10000000 });
+      }
+
       case 'generate_script': {
-        // AI 可以调用这个工具来正式提交脚本
         if (typeof args.code === 'string' && typeof args.name === 'string') {
           const domain = extractMainDomain(args.matchPatterns as string || '');
           if (scriptVersionManager) {
             await scriptVersionManager.addScript({
               name: args.name as string,
               description: args.description as string || '',
-              matchPattern: args.matchPatterns as string || '<all_urls>',
+              matchPattern: (args.matchPatterns as string)?.split(',')[0] || (args.matchPatterns as string) || '<all_urls>',
               domain: domain || 'unknown',
               code: args.code as string,
               changeNote: 'AI 生成'
@@ -1280,12 +1364,116 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
         return JSON.stringify({ error: 'Missing code or name' });
       }
 
+      case 'import_community_script': {
+        if (scriptRepository && typeof args.url === 'string') {
+          const code = await scriptRepository.fetchScriptCode(args.url as string);
+          if (!code) return JSON.stringify({ error: 'Failed to fetch script code' });
+          
+          const domain = extractMainDomain(await browser.tabs.query({ active: true, currentWindow: true }).then(tabs => tabs[0]?.url || ''));
+          
+          if (scriptVersionManager) {
+            await scriptVersionManager.addScript({
+              name: `Imported - ${args.url.split('/').pop()}`,
+              description: `从 ${args.url} 导入的社区脚本`,
+              matchPattern: '<all_urls>',
+              domain: domain || 'unknown',
+              code: code,
+              changeNote: '从社区导入'
+            });
+          }
+          return JSON.stringify({ success: true });
+        }
+        return JSON.stringify({ error: 'Repository not initialized or missing url' });
+      }
+
+      case 'update_memory': {
+        if (mem0Client && args.memoryId && args.content) {
+          await mem0Client.update(args.memoryId as string, args.content as string);
+          return JSON.stringify({ success: true });
+        }
+        return JSON.stringify({ error: 'Mem0 not initialized or missing arguments' });
+      }
+
+      case 'delete_memory': {
+        if (mem0Client && args.memoryId) {
+          await mem0Client.delete(args.memoryId as string);
+          return JSON.stringify({ success: true });
+        }
+        return JSON.stringify({ error: 'Mem0 not initialized or missing memoryId' });
+      }
+
+      case 'execute_script': {
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id || !args.scriptId) return JSON.stringify({ error: 'Missing tab or scriptId' });
+        
+        const script = await scriptVersionManager?.getScript(args.scriptId as string);
+        if (!script) return JSON.stringify({ error: 'Script not found' });
+        
+        const code = script.versions[0]?.compiledCode || script.versions[0]?.code;
+        await browser.tabs.sendMessage(tab.id, {
+          type: 'EXECUTE_IMMEDIATELY',
+          payload: { code }
+        });
+        return JSON.stringify({ success: true });
+      }
+
+      case 'stop_script': {
+        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) return JSON.stringify({ error: 'No active tab' });
+        // 目前简单的停止就是通过重新加载页面或者发送一个停止信号（如果脚本支持）
+        await browser.tabs.sendMessage(tab.id, {
+          type: 'STOP_SCRIPT_REQUEST',
+          payload: { scriptId: args.scriptId }
+        });
+        return JSON.stringify({ success: true, message: 'Stop signal sent' });
+      }
+
       default:
         return JSON.stringify({ error: `Tool ${name} not implemented` });
     }
   } catch (error) {
     return JSON.stringify({ error: error instanceof Error ? error.message : String(error) });
   }
+}
+
+/**
+ * 请求用户交互（通过 Port）
+ */
+async function requestUserInteraction(type: 'CONFIRMATION' | 'INPUT', payload: any): Promise<any> {
+  if (activePorts.size === 0) {
+    throw new Error('Popup is not open to handle interaction');
+  }
+
+  return new Promise((resolve, reject) => {
+    const interactionId = `int_${Date.now()}`;
+    
+    const responseHandler = (message: any) => {
+      if (message.type === 'USER_INTERACTION_RESPONSE' && message.payload.interactionId === interactionId) {
+        broadcastMessage({ type: 'INTERACTION_RESOLVED', payload: { interactionId } }); // 清理 UI
+        resolve(message.payload.result);
+      }
+    };
+
+    // 这里需要一个更复杂的机制来在多个端口中选择并监听响应
+    // 简化处理：假设第一个端口是活跃的
+    const port = Array.from(activePorts)[0];
+    port.onMessage.addListener(responseHandler);
+
+    broadcastMessage({
+      type: 'REQUEST_USER_INTERACTION',
+      payload: {
+        interactionId,
+        type,
+        ...payload
+      }
+    });
+
+    // 1 分钟超时
+    setTimeout(() => {
+      port.onMessage.removeListener(responseHandler);
+      reject(new Error('User interaction timeout'));
+    }, 60000);
+  });
 }
 
 

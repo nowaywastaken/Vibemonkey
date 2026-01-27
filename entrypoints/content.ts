@@ -54,6 +54,16 @@ interface HighlightElementsRequest {
   payload: { type: string; selector: string }[];
 }
 
+interface ExecuteImmediatelyRequest {
+  type: 'EXECUTE_IMMEDIATELY';
+  payload: { code: string };
+}
+
+interface StopScriptRequest {
+  type: 'STOP_SCRIPT_REQUEST';
+  payload: { scriptId: string };
+}
+
 type ContentMessage = 
   | AnalyzeDOMRequest 
   | FindElementsRequest
@@ -61,7 +71,9 @@ type ContentMessage =
   | GetPageInfoRequest 
   | GetNetworkStatsRequest 
   | GetRecentErrorsRequest 
-  | HighlightElementsRequest;
+  | HighlightElementsRequest
+  | ExecuteImmediatelyRequest
+  | StopScriptRequest;
 
 // 网络监控器实例
 let networkMonitor: ReturnType<typeof setupNetworkMonitor> | null = null;
@@ -70,7 +82,7 @@ const recentErrors: RuntimeError[] = [];
 
 export default defineContentScript({
   matches: ['<all_urls>'],
-  main() {
+  async main() {
     console.log('[VibeMokey] Content script loaded');
 
     // 初始化网络监控
@@ -88,6 +100,9 @@ export default defineContentScript({
       }).catch(() => {});
     });
 
+    // 运行匹配的脚本
+    await runMatchedScripts();
+
     // 监听来自 Background 的消息
     browser.runtime.onMessage.addListener((message: ContentMessage, sender, sendResponse) => {
       handleMessage(message).then(sendResponse);
@@ -95,6 +110,60 @@ export default defineContentScript({
     });
   },
 });
+
+/**
+ * 运行匹配的脚本
+ */
+async function runMatchedScripts(): Promise<void> {
+  try {
+    const url = window.location.href;
+    // 请求后台获取当前页面匹配的脚本代码
+    const response = await browser.runtime.sendMessage({
+      type: 'GET_MATCHING_SCRIPTS',
+      payload: { url }
+    });
+
+    if (response?.success && response.scripts) {
+      console.log(`[VibeMokey] Found ${response.scripts.length} matching scripts`);
+      
+      for (const script of response.scripts) {
+        try {
+          console.log(`[VibeMokey] Executing script: ${script.name}`);
+          
+          // 获取最新版本的代码
+          // 注意：ScriptVersionManager 存储的是 VersionedScript
+          const code = script.compiledCode || script.versions?.[0]?.compiledCode || script.code;
+          
+          if (!code) {
+            console.warn(`[VibeMokey] No code found for script: ${script.name}`);
+            continue;
+          }
+
+          // 安全执行：使用 Function 构造函数或直接 eval（在沙箱受限的情况下）
+          // 由于油猴脚本通常需要访问 window/document，这里直接执行
+          // 在 MV3 中，如果使用了 CSP，可能需要特殊的处理
+          const fn = new Function(code);
+          fn();
+          
+        } catch (error) {
+          console.error(`[VibeMokey] Error executing script ${script.name}:`, error);
+          // 报告运行时错误
+          browser.runtime.sendMessage({
+            type: 'REPORT_ERROR',
+            payload: {
+              type: 'console_error',
+              message: `脚本 ${script.name} 执行失败: ${error instanceof Error ? error.message : String(error)}`,
+              timestamp: new Date(),
+              url: window.location.href
+            }
+          }).catch(() => {});
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[VibeMokey] Failed to load/run scripts:', error);
+  }
+}
 
 /**
  * 处理消息
@@ -126,9 +195,38 @@ async function handleMessage(message: ContentMessage): Promise<unknown> {
         failedRequests: networkMonitor?.getFailedRequests()
       };
     
+    case 'EXECUTE_IMMEDIATELY':
+      return handleExecuteImmediately(message.payload);
+
+    case 'STOP_SCRIPT_REQUEST':
+      return handleStopScript(message.payload);
+    
     default:
       return { error: 'Unknown message type' };
   }
+}
+
+/**
+ * 立即执行代码
+ */
+async function handleExecuteImmediately(payload: { code: string }) {
+  try {
+    const fn = new Function(payload.code);
+    fn();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+/**
+ * 停止脚本执行（简单模拟）
+ */
+async function handleStopScript(payload: { scriptId: string }) {
+  // 实际上在浏览器中停止一个已经运行的脚本很难
+  // 这里可以作为一个占位，或者如果脚本注册了清理函数则调用它
+  console.log(`[VibeMokey] Stop request for script: ${payload.scriptId}`);
+  return { success: true, message: 'Stop signal received. Please refresh for full effect.' };
 }
 
 /**

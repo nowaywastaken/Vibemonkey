@@ -146,6 +146,14 @@ function connectPort(): void {
         hideLoading();
         showAgentMessage(message.payload || '生成失败');
         break;
+
+      case 'REQUEST_USER_INTERACTION':
+        handleUserInteractionRequest(message.payload);
+        break;
+
+      case 'INTERACTION_RESOLVED':
+        hideInteractionModal();
+        break;
     }
   });
 
@@ -515,6 +523,70 @@ function escapeHtml(text: string): string {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// Interaction Modal DOM 元素
+const interactionElements = {
+  modal: document.getElementById('interaction-modal') as HTMLDivElement,
+  title: document.getElementById('interaction-title') as HTMLHeadingElement,
+  prompt: document.getElementById('interaction-prompt') as HTMLParagraphElement,
+  inputContainer: document.getElementById('interaction-input-container') as HTMLDivElement,
+  input: document.getElementById('interaction-input') as HTMLInputElement,
+  choices: document.getElementById('interaction-choices') as HTMLDivElement,
+};
+
+// 处理 Agent 发起的交互请求
+function handleUserInteractionRequest(payload: any): void {
+  const { interactionId, type, question, prompt, choices, placeholder } = payload;
+  
+  interactionElements.title.textContent = type === 'CONFIRMATION' ? 'Agent 确认' : 'Agent 输入';
+  interactionElements.prompt.textContent = question || prompt || '请选择或输入：';
+  
+  // 清空之前的按钮
+  interactionElements.choices.innerHTML = '';
+  
+  if (type === 'INPUT') {
+    interactionElements.inputContainer.classList.remove('hidden');
+    interactionElements.input.value = '';
+    interactionElements.input.placeholder = placeholder || '';
+    
+    const submitBtn = document.createElement('button');
+    submitBtn.className = 'btn btn-primary';
+    submitBtn.textContent = '提交';
+    submitBtn.onclick = () => {
+      sendInteractionResponse(interactionId, interactionElements.input.value);
+    };
+    interactionElements.choices.appendChild(submitBtn);
+  } else {
+    interactionElements.inputContainer.classList.add('hidden');
+    
+    const actualChoices = choices || ['确认', '取消'];
+    actualChoices.forEach((choice: string) => {
+      const btn = document.createElement('button');
+      btn.className = choice === '取消' ? 'btn btn-secondary' : 'btn btn-primary';
+      btn.textContent = choice;
+      btn.onclick = () => {
+        sendInteractionResponse(interactionId, choice);
+      };
+      interactionElements.choices.appendChild(btn);
+    });
+  }
+  
+  interactionElements.modal.classList.remove('hidden');
+}
+
+function hideInteractionModal(): void {
+  interactionElements.modal.classList.add('hidden');
+}
+
+function sendInteractionResponse(interactionId: string, result: any): void {
+  if (streamPort) {
+    streamPort.postMessage({
+      type: 'USER_INTERACTION_RESPONSE',
+      payload: { interactionId, result }
+    });
+  }
+  hideInteractionModal();
 }
 
 // 启动
