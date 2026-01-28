@@ -29,7 +29,10 @@ let agentContextBuilder: AgentContextBuilder | null = null;
 // Agent 状态存储键
 const AGENT_STATUS_KEY = 'vibemonkey_agent_status';
 
-type AgentStatus = 'idle' | 'thinking' | 'writing' | 'tool_calling' | 'error';
+type AgentStatus = 'idle' | 'thinking' | 'writing' | 'tool_calling' | 'retrying' | 'error';
+
+// 生成中断标志
+let generationAborted = false;
 // 不再使用内存变量，改为从存储中获取
 async function getAgentStatusState(): Promise<{ status: AgentStatus; message: string }> {
   try {
@@ -194,12 +197,17 @@ export default defineBackground(() => {
       port.onDisconnect.addListener(() => {
         console.log('[VibeMonkey] Stream port disconnected');
         activePorts.delete(port);
+        // 注意：不设置 generationAborted，生成任务在后台继续运行
       });
 
-      // 处理来自 Popup 的流式生成请求
+      // 处理来自 Popup 的消息
       port.onMessage.addListener(async (message) => {
         if (message.type === 'GENERATE_SCRIPT_STREAM') {
           await handleGenerateScriptStream(message.payload);
+        } else if (message.type === 'STOP_GENERATION') {
+          // 用户明确点击停止按钮时才中断
+          generationAborted = true;
+          console.log('[VibeMonkey] User stopped generation');
         }
       });
     }
@@ -535,9 +543,8 @@ function buildEnhancedSystemPrompt(context: AgentContext | null): string {
 
   return prompt;
 }
-
 /**
- * 处理流式脚本生成请求
+ * 处理流式脚本生成请求（无限重试 + Mem0 记忆）
  */
 async function handleGenerateScriptStream(payload: GenerateScriptMessage['payload']): Promise<void> {
   if (!deepseekClient) {
@@ -545,149 +552,224 @@ async function handleGenerateScriptStream(payload: GenerateScriptMessage['payloa
     return;
   }
 
-  try {
-    updateAgentStatus('thinking', '正在初始化 Agent...');
-    
-    const { userRequest, currentUrl, pageInfo } = payload;
-    const domain = pageInfo?.domain || new URL(currentUrl).hostname;
+  // 重置中断标志
+  generationAborted = false;
+  
+  const { userRequest, currentUrl, pageInfo } = payload;
+  const domain = pageInfo?.domain || new URL(currentUrl).hostname;
+  
+  let retryCount = 0;
+  let lastError = '';
+  let scriptCode = '';
+  let fullAssistantContent = '';
+  let compileResult: CompileResult | null = null;
 
-    // 1. 构建初始上下文
-    let agentContext: AgentContext | null = null;
-    if (agentContextBuilder) {
-      let memoryContext = '';
-      if (mem0Client) {
-        const memories = await mem0Client.search(domain, { domain });
-        if (memories.length > 0) {
-          memoryContext = memories.map(m => `- ${m.content}`).join('\n');
+  // 无限重试循环，直到成功或用户关闭 Popup
+  while (!generationAborted) {
+    retryCount++;
+    
+    try {
+      updateAgentStatus('retrying', retryCount > 1 ? `第 ${retryCount} 次尝试...` : '正在初始化 Agent...');
+      
+      // 1. 构建上下文
+      let agentContext: AgentContext | null = null;
+      let failedApproaches = '';
+      
+      if (agentContextBuilder) {
+        let memoryContext = '';
+        if (mem0Client) {
+          // 查询普通记忆
+          const memories = await mem0Client.search(domain, { domain });
+          if (memories.length > 0) {
+            memoryContext = memories.map(m => `- ${m.content}`).join('\n');
+          }
+          
+          // 查询历史失败记录
+          const failures = await mem0Client.search(`${domain} 生成失败`, { 
+            domain,
+            type: 'script_version' 
+          });
+          const recentFailures = failures.filter(f => f.content.includes('失败'));
+          if (recentFailures.length > 0) {
+            failedApproaches = '\n\n⚠️ 以下方法已经失败过，请避免重复：\n' + 
+              recentFailures.slice(0, 5).map(f => `- ${f.content}`).join('\n');
+          }
+        }
+
+        agentContext = await agentContextBuilder.buildContext(
+          currentUrl,
+          pageInfo ? { title: pageInfo.title, markdown: pageInfo.markdown || '' } : undefined,
+          memoryContext
+        );
+      }
+
+      // 2. 构建提示（注入失败记录）
+      const systemPrompt = buildEnhancedSystemPrompt(agentContext) + failedApproaches;
+      const userPrompt = buildUserPrompt(userRequest, currentUrl, pageInfo) + 
+        (lastError ? `\n\n上次尝试失败原因：${lastError}。请修正并重新生成。` : '');
+
+      startKeepAlive();
+      if (retryCount === 1) {
+        broadcastMessage({ type: 'SCRIPT_GENERATION_START' });
+      }
+
+      fullAssistantContent = '';
+      
+      // 3. 运行 Agent 循环
+      const agentLoop = deepseekClient.runStreamingAgentLoop(
+        [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        getAllTools(),
+        executeTool
+      );
+
+      for await (const event of agentLoop) {
+        if (generationAborted) break;
+        
+        switch (event.type) {
+          case 'token':
+            fullAssistantContent += event.content;
+            broadcastMessage({
+              type: 'SCRIPT_GENERATION_CHUNK',
+              payload: event.content
+            });
+            break;
+          
+          case 'tool_call':
+            updateAgentStatus('tool_calling', event.content);
+            break;
+          
+          case 'tool_result':
+            console.log('[Agent Tool Result]', event.content);
+            updateAgentStatus('thinking', '正在处理工具返回结果...');
+            break;
+          
+          case 'error':
+            lastError = event.content;
+            break;
         }
       }
-
-      agentContext = await agentContextBuilder.buildContext(
-        currentUrl,
-        pageInfo ? { title: pageInfo.title, markdown: pageInfo.markdown || '' } : undefined,
-        memoryContext
-      );
-    }
-
-    // 2. 构建系统和用户提示
-    const systemPrompt = buildEnhancedSystemPrompt(agentContext);
-    const userPrompt = buildUserPrompt(userRequest, currentUrl, pageInfo);
-
-    startKeepAlive();
-    broadcastMessage({ type: 'SCRIPT_GENERATION_START' });
-
-    let fullAssistantContent = '';
-    
-    // 3. 运行 Agent 循环
-    const agentLoop = deepseekClient.runStreamingAgentLoop(
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      getAllTools(),
-      executeTool
-    );
-
-    for await (const event of agentLoop) {
-      switch (event.type) {
-        case 'token':
-          fullAssistantContent += event.content;
-          broadcastMessage({
-            type: 'SCRIPT_GENERATION_CHUNK',
-            payload: event.content
-          });
-          break;
-        
-        case 'tool_call':
-          updateAgentStatus('tool_calling', event.content);
-          break;
-        
-        case 'tool_result':
-          // 可以在这里把工具结果也发给 UI，但通常保持 UI 简洁
-          console.log('[Agent Tool Result]', event.content);
-          updateAgentStatus('thinking', '正在处理工具返回结果...');
-          break;
-        
-        case 'error':
-          updateAgentStatus('error', event.content);
-          break;
+      
+      stopKeepAlive();
+      
+      if (generationAborted) {
+        updateAgentStatus('idle', '已停止生成');
+        return;
       }
-    }
-    
-    stopKeepAlive();
-    
-    // 4. 解析生成的脚本
-    const scriptMatch = fullAssistantContent.match(/```(?:typescript|javascript|ts|js)?\n([\s\S]*?)```/);
-    if (!scriptMatch) {
-      updateAgentStatus('error', '未能生成有效脚本');
-      return;
-    }
+      
+      // 4. 解析脚本
+      const scriptMatch = fullAssistantContent.match(/```(?:typescript|javascript|ts|js)?\n([\s\S]*?)```/);
+      if (!scriptMatch) {
+        lastError = '未能解析出有效代码块，请用 ```typescript 或 ```javascript 包裹代码';
+        // 记录失败到 Mem0
+        if (mem0Client) {
+          await mem0Client.add(
+            `尝试 #${retryCount} 失败：${lastError}`,
+            'script_version',
+            { domain, error: 'parse_error' }
+          );
+        }
+        broadcastMessage({ 
+          type: 'SCRIPT_GENERATION_RETRY', 
+          payload: { attempt: retryCount, error: lastError } 
+        });
+        continue; // 重试
+      }
 
-    const scriptCode = scriptMatch[1].trim();
+      scriptCode = scriptMatch[1].trim();
 
-    // 5. 生成、审计并保存
-    const metadata: ScriptMetadata = {
-      name: extractScriptName(fullAssistantContent) || `VibeMonkey - ${domain}`,
-      description: userRequest.slice(0, 100),
-      match: [urlToMatchPattern(currentUrl)],
-      grant: ['none'],
-    };
+      // 5. 编译
+      const metadata: ScriptMetadata = {
+        name: extractScriptName(fullAssistantContent) || `VibeMonkey - ${domain}`,
+        description: userRequest.slice(0, 100),
+        match: [urlToMatchPattern(currentUrl)],
+        grant: ['none'],
+      };
 
-    const metadataBlock = generateMetadataBlock(metadata);
-    
-    updateAgentStatus('writing', '正在编译脚本...');
-    const compileResult = await compileUserScript(scriptCode, metadataBlock);
-    
-    if (!compileResult.success || !compileResult.code) {
-      updateAgentStatus('error', `编译失败: ${compileResult.error}`);
+      const metadataBlock = generateMetadataBlock(metadata);
+      updateAgentStatus('writing', '正在编译脚本...');
+      compileResult = await compileUserScript(scriptCode, metadataBlock);
+      
+      if (!compileResult.success || !compileResult.code) {
+        lastError = `编译失败: ${compileResult.error}`;
+        // 记录编译失败到 Mem0
+        if (mem0Client) {
+          await mem0Client.add(
+            `尝试 #${retryCount} 编译失败：${compileResult.error}\n代码片段：${scriptCode.slice(0, 200)}...`,
+            'script_version',
+            { domain, error: 'compile_error' }
+          );
+        }
+        broadcastMessage({ 
+          type: 'SCRIPT_GENERATION_RETRY', 
+          payload: { attempt: retryCount, error: lastError } 
+        });
+        continue; // 重试
+      }
+
+      // 6. 成功！保存并跳出循环
+      const fullScript = compileResult.code;
+      
+      if (mem0Client) {
+        await mem0Client.add(
+          `为 ${domain} 成功生成脚本：${metadata.name}。用户需求：${userRequest}`,
+          'script_version',
+          { domain, scriptName: metadata.name }
+        );
+      }
+
+      if (scriptVersionManager) {
+        await scriptVersionManager.addScript({
+          name: metadata.name,
+          description: metadata.description,
+          matchPattern: urlToMatchPattern(currentUrl),
+          domain,
+          code: scriptCode,
+          compiledCode: fullScript,
+          userRequest,
+        });
+      }
+
+      updateAgentStatus('idle', `已成功生成脚本：${metadata.name}`);
+
       broadcastMessage({
-        type: 'SCRIPT_GENERATION_ERROR',
-        payload: `编译失败: ${compileResult.error}`
+        type: 'SCRIPT_GENERATION_COMPLETE',
+        payload: {
+          success: true,
+          script: fullScript,
+          metadata
+        }
       });
-      return;
-    }
+      
+      return; // 成功，退出函数
 
-    const fullScript = compileResult.code;
-    
-    if (mem0Client) {
-      await mem0Client.add(
-        `为 ${domain} 生成了脚本：${metadata.name}。用户需求：${userRequest}`,
-        'script_version',
-        { domain, scriptName: metadata.name }
-      );
-    }
-
-    if (scriptVersionManager) {
-      await scriptVersionManager.addScript({
-        name: metadata.name,
-        description: metadata.description,
-        matchPattern: urlToMatchPattern(currentUrl),
-        domain,
-        code: scriptCode,
-        compiledCode: fullScript,
-        userRequest,
-      });
-    }
-
-    updateAgentStatus('idle', `已成功生成脚本：${metadata.name}`);
-
-    broadcastMessage({
-      type: 'SCRIPT_GENERATION_COMPLETE',
-      payload: {
-        success: true,
-        script: fullScript,
-        metadata
+    } catch (error) {
+      stopKeepAlive();
+      lastError = error instanceof Error ? error.message : '未知错误';
+      console.error(`[VibeMonkey] 尝试 #${retryCount} 失败:`, error);
+      
+      // 记录异常到 Mem0
+      if (mem0Client) {
+        await mem0Client.add(
+          `尝试 #${retryCount} 异常：${lastError}`,
+          'script_version',
+          { domain, error: 'exception' }
+        );
       }
-    });
-
-  } catch (error) {
-    stopKeepAlive();
-    console.error('[VibeMonkey] Agent loop error:', error);
-    updateAgentStatus('error', error instanceof Error ? error.message : '生成失败');
-    broadcastMessage({
-      type: 'SCRIPT_GENERATION_ERROR',
-      payload: error instanceof Error ? error.message : 'Unknown error'
-    });
+      
+      broadcastMessage({ 
+        type: 'SCRIPT_GENERATION_RETRY', 
+        payload: { attempt: retryCount, error: lastError } 
+      });
+      // 继续重试
+    }
+  }
+  
+  // 如果循环结束是因为用户中断
+  if (generationAborted) {
+    updateAgentStatus('idle', '已停止生成');
   }
 }
 

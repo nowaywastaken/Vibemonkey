@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { browser } from 'wxt/browser';
-import { Settings, Send, Copy, Check, ChevronDown, ChevronUp, Power, Bot, Activity } from 'lucide-react';
+import { Settings, Send, Copy, Check, ChevronDown, ChevronUp, Power, Bot, Activity, Square } from 'lucide-react';
 import clsx from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -32,7 +32,7 @@ interface ScriptListResponse {
   otherDomainScripts: OtherDomainScript[];
 }
 
-type AgentStatus = 'idle' | 'thinking' | 'writing' | 'tool_calling' | 'error';
+type AgentStatus = 'idle' | 'thinking' | 'writing' | 'tool_calling' | 'retrying' | 'error';
 
 export default function App() {
   // State
@@ -212,6 +212,12 @@ export default function App() {
             setAgentMessage(message.payload || 'Generation failed');
             break;
 
+          case 'SCRIPT_GENERATION_RETRY':
+            // 重试中，更新 UI 显示尝试次数
+            setAgentMessage(`第 ${message.payload.attempt} 次尝试失败: ${message.payload.error}，正在重试...`);
+            setGeneratedScript(''); // 清空之前的输出
+            break;
+
           case 'REQUEST_USER_INTERACTION':
             setInteraction(message.payload);
             break;
@@ -253,6 +259,7 @@ export default function App() {
       case 'thinking': return 'Thinking...';
       case 'writing': return 'Writing Code...';
       case 'tool_calling': return 'Using Tools...';
+      case 'retrying': return 'Retrying...';
       case 'error': return 'Error';
       default: return 'Unknown';
     }
@@ -332,15 +339,20 @@ export default function App() {
   }
 
   async function saveSettings() {
-    await browser.runtime.sendMessage({
+    const result = await browser.runtime.sendMessage({
       type: 'SAVE_API_KEY',
       payload: {
         openrouter: apiKeys.openrouter || undefined,
         mem0: apiKeys.mem0 || undefined,
       },
     });
+    if (!result?.success) {
+      setAgentMessage('保存 API Key 失败');
+      return;
+    }
     setShowSettings(false);
     checkApiStatus();
+    setAgentMessage('设置已保存');
   }
 
   function handleInteractionResponse(result: any) {
@@ -516,15 +528,32 @@ export default function App() {
               }
             }}
             placeholder="How should I change this page?"
-            className="w-full p-3 pr-12 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none h-20 shadow-inner"
+            className="w-full p-3 pr-24 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none h-20 shadow-inner"
           />
-          <button
-            onClick={handleSend}
-            disabled={!userRequest.trim() || isGenerating}
-            className="absolute right-2 bottom-2 p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
-          >
-            <Send size={16} />
-          </button>
+          <div className="absolute right-2 bottom-2 flex gap-2">
+            {isGenerating && (
+              <button
+                onClick={() => {
+                  if (portRef.current) {
+                    portRef.current.postMessage({ type: 'STOP_GENERATION' });
+                    setIsGenerating(false);
+                    setAgentMessage('已停止生成');
+                  }
+                }}
+                className="p-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors shadow-sm"
+                title="停止生成"
+              >
+                <Square size={16} />
+              </button>
+            )}
+            <button
+              onClick={handleSend}
+              disabled={!userRequest.trim() || isGenerating}
+              className="p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
+            >
+              <Send size={16} />
+            </button>
+          </div>
         </div>
       </div>
 
