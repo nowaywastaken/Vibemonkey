@@ -124,7 +124,7 @@ export class DOMPruner {
 
   /**
    * 阶段2：评分函数 - 根据关键词和交互性评分
-   * 实现 Prune4Web 三级权重策略
+   * 实现增强版 DTPP 三级权重策略
    */
   buildScoringFunction(): (el: Element) => number {
     const { keywords, weights } = this.options;
@@ -135,17 +135,15 @@ export class DOMPruner {
       const tagName = el.tagName.toLowerCase();
       const text = el.textContent?.toLowerCase() || '';
       
-      // 基础分：交互元素
+      // === 1. 基础分：元素类型 ===
       if (INTERACTIVE_TAGS.includes(tagName)) {
-        score += 10;
+        score += 15; // 提高交互元素权重
       }
-
-      // 基础分：语义元素
       if (SEMANTIC_TAGS.includes(tagName)) {
         score += 5;
       }
 
-      // 处理关键词评分
+      // === 2. 关键词评分：三级权重 ===
       for (const keyword of keywordSet) {
         const weight = weights[keyword] ?? 1.0;
         
@@ -154,7 +152,7 @@ export class DOMPruner {
           score += 30 * weight;
         }
 
-        // Tier 2 (0.7): 元数据匹配 (aria-label, title, alt, placeholder)
+        // Tier 2 (0.7): 元数据匹配
         const metadataAttrs = ['aria-label', 'title', 'alt', 'placeholder', 'role'];
         for (const attr of metadataAttrs) {
           const val = el.getAttribute(attr)?.toLowerCase();
@@ -163,23 +161,57 @@ export class DOMPruner {
           }
         }
 
-        // Tier 3 (0.3): 结构/属性匹配 (id, class, name)
-        const structAttrs = ['id', 'class', 'name', 'data-testid'];
+        // Tier 3 (0.3): 结构/属性匹配
+        const structAttrs = ['id', 'class', 'name', 'data-testid', 'data-id', 'data-type'];
         for (const attr of structAttrs) {
           const val = el.getAttribute(attr)?.toLowerCase();
           if (val && val.includes(keyword)) {
-            score += 9 * weight;
+            score += 12 * weight; // 稍微提高结构权重
+          }
+        }
+
+        // 检查所有 data-* 属性
+        for (const attr of el.attributes) {
+          if (attr.name.startsWith('data-') && attr.value.toLowerCase().includes(keyword)) {
+            score += 15 * weight;
           }
         }
       }
 
-      // 额外的结构加分
-      if (el.id) score += 10;
-      if (el.getAttribute('role')) score += 5;
+      // === 3. 选择器稳定性加分 ===
+      // 有 ID 是最稳定的
+      if (el.id) score += 20;
+      // 有 data-testid 也很稳定
+      if (el.getAttribute('data-testid')) score += 18;
+      // 有明确 role
+      if (el.getAttribute('role')) score += 10;
+      // 有 name 属性（表单元素）
+      if (el.getAttribute('name')) score += 8;
 
-      return score;
+      // === 4. 可见性加分 ===
+      try {
+        const rect = el.getBoundingClientRect();
+        // 有尺寸的元素
+        if (rect.width > 0 && rect.height > 0) {
+          score += 5;
+          // 在视口内
+          if (rect.top >= 0 && rect.top < window.innerHeight) {
+            score += 5;
+          }
+        }
+      } catch (e) {
+        // getBoundingClientRect 可能在某些情况下失败
+      }
+
+      // === 5. 文本长度惩罚：太长的文本可能不是目标 ===
+      if (text.length > 500) {
+        score -= 10;
+      }
+
+      return Math.max(0, score);
     };
   }
+
 
   /**
    * 阶段3：提取前 N 个最相关节点
